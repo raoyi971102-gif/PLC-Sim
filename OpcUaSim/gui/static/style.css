@@ -1,0 +1,168 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0; font: 14px/1.55 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  color: #ddd; background: #1e1f22;
+}
+code, .mono, pre, textarea, input, select { font-family: "JetBrains Mono", "Consolas", monospace; }
+
+/* ---------- 顶部 ---------- */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 18px; background: #161719; border-bottom: 1px solid #2a2b2f;
+}
+.brand { display: flex; align-items: baseline; gap: 12px; }
+.brand h1 { margin: 0; font-size: 18px; color: #fff; }
+.brand .logo { font-size: 22px; }
+.brand .sub { color: #888; font-size: 12px; }
+.status { display: flex; gap: 14px; align-items: center; color: #aaa; font-size: 12px; }
+.status .dot {
+  display: inline-block; width: 10px; height: 10px; margin-right: 4px;
+  border-radius: 50%; background: #555; box-shadow: 0 0 5px rgba(0,0,0,.4);
+}
+.status .dot.on  { background: #3ecf8e; box-shadow: 0 0 6px rgba(62,207,142,.7); }
+.status .dot.busy{ background: #f5a623; box-shadow: 0 0 6px rgba(245,166,35,.8); animation: pulse 1s infinite; }
+@keyframes pulse { 0%,100%{opacity:.5} 50%{opacity:1} }
+.busy { color: #f5a623; margin-left: 12px; font-weight: 600; }
+
+/* ---------- 项目栏 ---------- */
+.projectbar {
+  display: flex; gap: 8px; align-items: center;
+  padding: 8px 18px; background: #17181b; border-bottom: 1px solid #2a2b2f;
+}
+.projectbar label { color: #999; }
+.projectbar input#projectPath { flex: 1; min-width: 200px; }
+.projectbar .spacer { flex: 0 0 20px; }
+
+/* ---------- 标签 ---------- */
+.tabs { display: flex; padding: 0 18px; background: #17181b; border-bottom: 1px solid #2a2b2f; }
+.tab {
+  padding: 10px 18px; background: transparent; color: #aaa;
+  border: none; border-bottom: 2px solid transparent; cursor: pointer;
+  font-size: 14px;
+}
+.tab:hover { color: #eee; }
+.tab.active { color: #fff; border-bottom-color: #3ecf8e; }
+
+/* ---------- 主区面板 ---------- */
+/* --log-h 由 JS 控制 (默认 240px), main 高度自动 = 视口高 - 顶部 220px - 日志高 --log-h */
+:root { --log-h: 240px; }
+main { padding: 14px 18px 8px; height: calc(100vh - 220px - var(--log-h)); overflow: auto; }
+.panel { display: none; }
+.panel.active { display: block; }
+.row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.row label { color: #ccc; display: flex; align-items: center; gap: 6px; }
+.row .hint { color: #888; font-size: 12px; }
+.row .pid { color: #aaa; margin-left: 12px; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+.two-col > div { display: flex; flex-direction: column; gap: 6px; }
+label { color: #ccc; }
+
+input[type=text], input[type=number], select, textarea {
+  background: #101114; color: #ddd; border: 1px solid #333;
+  border-radius: 4px; padding: 6px 8px;
+}
+textarea { width: 100%; resize: vertical; }
+.readonly { background: #0d0e10; }
+
+button {
+  background: #2a2b30; color: #ddd; border: 1px solid #3a3b40;
+  border-radius: 4px; padding: 6px 12px; cursor: pointer;
+}
+button:hover { background: #34353a; border-color: #55565c; }
+button.primary { background: #2e7d5b; border-color: #3ecf8e; color: #fff; }
+button.primary:hover { background: #379e6b; }
+button.big { padding: 10px 20px; font-size: 15px; }
+button[disabled] { opacity: .5; cursor: not-allowed; }
+
+.result {
+  margin: 8px 0; padding: 8px 12px; border-radius: 4px;
+  background: #101114; border: 1px solid #2a2b30; white-space: pre-wrap;
+  color: #bbb; font-size: 13px; max-height: 260px; overflow: auto;
+}
+.result.ok    { border-left: 3px solid #3ecf8e; color: #bfe4d0; }
+.result.err   { border-left: 3px solid #e0665b; color: #f4c4bf; }
+.result.warn  { border-left: 3px solid #f5a623; color: #ffe0b0; }
+
+/* ---------- GVL 列表 ---------- */
+.gvl-list {
+  background: #101114; border: 1px solid #2a2b30; border-radius: 4px;
+  padding: 6px 10px; min-height: 60px; max-height: 220px; overflow: auto;
+  font-family: "JetBrains Mono", "Consolas", monospace; font-size: 13px;
+}
+.gvl-list label { display: block; padding: 3px 0; }
+.gvl-list input { margin-right: 6px; }
+
+/* ---------- 编辑 tab: 左侧对象列表 ---------- */
+.edit-grid { grid-template-columns: 340px 1fr; }
+.edit-left  { min-width: 0; }
+.edit-right { min-width: 0; }
+.editables {
+  background: #101114; border: 1px solid #2a2b30; border-radius: 4px;
+  padding: 4px 0; height: 400px; overflow: auto;
+  font-family: "JetBrains Mono", "Consolas", monospace; font-size: 13px;
+}
+.editables .group-hd {
+  padding: 6px 10px; color: #888; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 1px;
+  background: #16171b; border-top: 1px solid #23242a; border-bottom: 1px solid #23242a;
+  position: sticky; top: 0; z-index: 1;
+}
+.editables .item {
+  padding: 4px 12px; cursor: pointer; display: flex; align-items: center; gap: 6px;
+  color: #ddd; border-bottom: 1px solid #191a1e;
+}
+.editables .item:hover { background: #23242a; }
+.editables .item.active { background: #2e7d5b; color: #fff; }
+.editables .kbadge {
+  padding: 1px 5px; border-radius: 3px; font-size: 10px; font-weight: 600;
+  background: #333; color: #aaa; min-width: 32px; text-align: center;
+}
+.editables .kbadge.POU { background: #2e5b7d; color: #cfe6ff; }
+.editables .kbadge.GVL { background: #7d5b2e; color: #ffd8a8; }
+.editables .kbadge.DUT { background: #5b2e7d; color: #dfcfff; }
+.editables .kbadge.OTHER { background: #444; color: #ccc; }
+.editables .item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.editables .item-path { color: #666; font-size: 11px; margin-left: 4px; }
+.editables .empty { padding: 20px; color: #666; text-align: center; }
+.raw-structure { margin-top: 10px; }
+.raw-structure summary { color: #888; cursor: pointer; font-size: 12px; padding: 6px 0; }
+.raw-structure pre { max-height: 200px; overflow: auto; }
+
+.badge {
+  padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600;
+  background: #333; color: #aaa;
+}
+
+/* ---------- 表格 ---------- */
+.table-wrap { max-height: 320px; overflow: auto; border: 1px solid #2a2b30; border-radius: 4px; margin-top: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th, td { padding: 4px 8px; text-align: left; border-bottom: 1px solid #26272b; white-space: nowrap; }
+th { background: #17181b; position: sticky; top: 0; color: #aaa; font-weight: 500; }
+tr:hover td { background: #202126; }
+
+/* ---------- 日志 ---------- */
+.log-resizer {
+  height: 6px; background: #2a2b2f; cursor: ns-resize;
+  border-top: 1px solid #333; border-bottom: 1px solid #333;
+  transition: background .15s;
+}
+.log-resizer:hover, .log-resizer.dragging { background: #3ecf8e; }
+.logbar { background: #17181b; height: var(--log-h); display: flex; flex-direction: column; }
+.logbar.collapsed { height: auto !important; }
+.logbar.collapsed .logbox { display: none; }
+.loghead { display: flex; align-items: center; gap: 10px; padding: 6px 18px; background: #14151a; border-bottom: 1px solid #2a2b2f; flex: 0 0 auto; }
+.loghead .conn { margin-left: auto; color: #999; font-size: 12px; }
+.logbox {
+  flex: 1 1 auto; min-height: 0; overflow: auto; padding: 4px 12px;
+  font-family: "JetBrains Mono", "Consolas", monospace; font-size: 12px;
+  background: #0e0f12;
+}
+.logbox .line { padding: 2px 4px; border-radius: 2px; white-space: pre-wrap; word-break: break-all; }
+.logbox .line.DEBUG   { color: #888; }
+.logbox .line.INFO    { color: #cdd; }
+.logbox .line.WARNING { color: #ffd47a; background: #221d0f; }
+.logbox .line.ERROR   { color: #ff9c94; background: #2a1414; }
+.logbox .ts { color: #666; margin-right: 6px; }
+.logbox .src { color: #7bb; margin-right: 6px; }
+
+hr { border: none; border-top: 1px dashed #333; margin: 12px 0; }

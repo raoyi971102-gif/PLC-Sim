@@ -1,0 +1,11 @@
+# 基础 TCP/Socket 示例仅使用 Python 3.10+ 标准库，无需安装 PyPI 包。
+#
+# 以下是按功能提供的本地/厂家依赖，无法安全地写成公共 PyPI 包名：
+#
+# 1. dobot_v4_project_example.py
+#    需要包含 eit_ptlc 的 pTLC_platformUI 项目：
+#    python -m pip install -e C:\path\to\pTLC_platformUI
+#
+# 2. siasun_duco_example.py 的真实机器人连接
+#    需要向厂家或集成商取得与控制器 Core 版本匹配的 DucoCobotApi_py SDK，
+#    并按厂家说明把 SDK 安装到当前 Python 环境。

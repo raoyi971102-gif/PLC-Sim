@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.bak
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Local configuration and runtime output
+.env
+*.local.json
+*.log
+OpcUaSim/extracted/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+.WeDrive
+
+# InoProShop local/runtime files
+*.autosave
+*.opt
+~project.protect
+
+# Optional third-party MCP bundle is supplied locally unless its license permits redistribution
+OpcUaSim/vendor/inoproshop-mcp/bundle.min.js

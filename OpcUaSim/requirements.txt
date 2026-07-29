@@ -1,0 +1,5 @@
+opcua>=0.98.13
+PyYAML>=6.0
+fastapi>=0.110
+uvicorn>=0.23
+pydantic>=2.0

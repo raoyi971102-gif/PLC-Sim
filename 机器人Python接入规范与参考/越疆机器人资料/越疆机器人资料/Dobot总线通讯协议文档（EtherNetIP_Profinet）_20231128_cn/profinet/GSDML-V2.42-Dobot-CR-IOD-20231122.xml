@@ -1,0 +1,775 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<ISO15745Profile xmlns="http://www.profibus.com/GSDML/2003/11/DeviceProfile" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.profibus.com/GSDML/2003/11/DeviceProfile ..\xsd\GSDML-DeviceProfile-V2.42.xsd">
+	<ProfileHeader>
+		<ProfileIdentification>PROFINET Device Profile</ProfileIdentification>
+		<ProfileRevision>1.00</ProfileRevision>
+		<ProfileName>Device Profile for PROFINET Devices</ProfileName>
+		<ProfileSource>PROFIBUS Nutzerorganisation e. V. (PNO)</ProfileSource>
+		<ProfileClassID>Device</ProfileClassID>
+		<ISO15745Reference>
+			<ISO15745Part>4</ISO15745Part>
+			<ISO15745Edition>1</ISO15745Edition>
+			<ProfileTechnology>GSDML</ProfileTechnology>
+		</ISO15745Reference>
+	</ProfileHeader>
+	<ProfileBody>
+		<DeviceIdentity VendorID="0x06F6" DeviceID="0x0001">
+		    <InfoText TextId="CR_FamilyDescription"/>
+			<VendorName Value="Dobot"/>
+		</DeviceIdentity>
+		<DeviceFunction>
+			<Family MainFamily="I/O" ProductFamily="DevKit"/>
+		</DeviceFunction>
+		<ApplicationProcess>
+			<DeviceAccessPointList>
+				<DeviceAccessPointItem ID="DAP_1" PhysicalSlots="0..32" ModuleIdentNumber="0x00000001" MinDeviceInterval="1024" DNS_CompatibleName="dobot-cr" ObjectUUID_LocalIndex="1" FixedInSlots="0" MultipleWriteSupported="true" NameOfStationNotTransferable="true" DeviceAccessSupported="true" NumberOfDeviceAccessAR="1" ImplementationType="software" LLDP_NoD_Supported="true" PNIO_Version="V2.42" MaxSupportedRecordSize="32768" CheckDeviceID_Allowed="true" IOXS_Required="false" ResetToFactoryModes="2" AddressAssignment="LOCAL;DCP" SharedDeviceSupported="false">
+					<ModuleInfo CategoryRef="ID_PND_LinuxNative">
+						<Name TextId="TOK_TextId_Module_Name_Linux_Native"/>
+						<InfoText TextId="TOK_InfoTextId_Info_Linux_Native"/>
+						<VendorName Value="Dobot"/>
+						<OrderNumber Value="Dobot CR"/>
+					</ModuleInfo>
+					<CertificationInfo ConformanceClass="B" ApplicationClass="" NetloadClass="II"/>
+					<IOConfigData MaxInputLength="1440" MaxOutputLength="1440"/>
+					<UseableModules>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_1" AllowedInSlots="1"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_2" AllowedInSlots="2"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_3" AllowedInSlots="3"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_4" AllowedInSlots="4"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_5" AllowedInSlots="5"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_6" AllowedInSlots="6"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_7" AllowedInSlots="7"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_8" AllowedInSlots="8"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_9" AllowedInSlots="9"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_10" AllowedInSlots="10"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_11" AllowedInSlots="11"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_12" AllowedInSlots="12"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_13" AllowedInSlots="13"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_14" AllowedInSlots="14"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_15" AllowedInSlots="15"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_16" AllowedInSlots="16"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_17" AllowedInSlots="17"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_18" AllowedInSlots="18"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_19" AllowedInSlots="19"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_20" AllowedInSlots="20"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_21" AllowedInSlots="21"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_22" AllowedInSlots="22"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_23" AllowedInSlots="23"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_24" AllowedInSlots="24"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_25" AllowedInSlots="25"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_26" AllowedInSlots="26"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_27" AllowedInSlots="27"/>
+						<ModuleItemRef ModuleItemTarget="ID_MOD_28" AllowedInSlots="28"/>
+					</UseableModules>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="IDS_D01" IM5_Supported="true" SubmoduleIdentNumber="0x00000001" MayIssueProcessAlarm="true" Writeable_IM_Records="1 2 3 4">
+							<IOData/>
+							<RecordDataList/>
+							<ModuleInfo>
+								<Name TextId="TOK_TextId_Module_Name_Linux_Native"/>
+								<InfoText TextId="TOK_InfoTextId_Info_Linux_Native"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+					<SystemDefinedSubmoduleList>
+						<InterfaceSubmoduleItem ID="IDS_1I" SubslotNumber="32768" SubmoduleIdentNumber="0x00000010" TextId="TOK_TextId_Interface_Name_Linux_Native" DelayMeasurementSupported="false" SupportedProtocols="SNMP;LLDP" NetworkComponentDiagnosisSupported="false" DCP_BoundarySupported="true" PTP_BoundarySupported="true" SupportedRT_Classes="RT_CLASS_1" PDEV_CombinedObjectSupported="true" Writeable_IM_Records="1 2 3 4" SupportedServiceProtocols="CLRPC" IM5_Supported="true">
+							<ApplicationRelations NumberOfAR="1" NumberOfAdditionalInputCR="0" NumberOfAdditionalMulticastProviderCR="0" NumberOfAdditionalOutputCR="0" NumberOfMulticastConsumerCR="0" StartupMode="Advanced;Legacy" PullModuleAlarmSupported="false">
+								<TimingProperties SendClock="32" ReductionRatio="1 2 4 8 16 32 64 128 256 512"/>
+							</ApplicationRelations>
+						</InterfaceSubmoduleItem>
+						<PortSubmoduleItem ID="IDS_1P_RJ45" TextId="TOK_Text_Id_Port_RJ45_Desc" SubslotNumber="32769" SubmoduleIdentNumber="0x00000011" CheckMAUTypeDifferenceSupported="true" PortDeactivationSupported="false" LinkStateDiagnosisCapability="Up+Down" ShortPreamble100MBitSupported="false" CheckMAUTypeSupported="true" Writeable_IM_Records="1 2 3 4" IM5_Supported="true">
+							<MAUTypeList>
+								<MAUTypeItem Value="16" AdjustSupported="false"/>
+								<MAUTypeItem Value="30" AdjustSupported="false"/>
+							</MAUTypeList>
+						</PortSubmoduleItem>
+					</SystemDefinedSubmoduleList>
+					<Graphics>
+						<GraphicItemRef Type="DeviceSymbol" GraphicItemTarget="ID_Graph_1"/>
+					</Graphics>
+					<AssetManagement/>
+				</DeviceAccessPointItem>
+			</DeviceAccessPointList>
+			<!-- ============================================ -->
+			<!--            List of modules                   -->
+			<!-- ============================================ -->
+			<ModuleList>
+                <!--1. I.RobotStatus.status1	8-->
+				<ModuleItem ID="ID_MOD_1" ModuleIdentNumber="0x00000033">
+					<ModuleInfo>
+						<Name TextId="TextID_1"/>
+						<InfoText TextId="InfoTextID_1"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="11" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_1" Length="8" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_1"/>
+								<InfoText TextId="InfoTextID_1"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--2. I.RobotStatus.status2	24-->
+				<ModuleItem ID="ID_MOD_2" ModuleIdentNumber="0x00000034">
+					<ModuleInfo>
+						<Name TextId="TextID_2"/>
+						<InfoText TextId="InfoTextID_2"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="12" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_2" Length="24" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_2"/>
+								<InfoText TextId="InfoTextID_2"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--3. I.RobotStatus.Load	16-->
+				<ModuleItem ID="ID_MOD_3" ModuleIdentNumber="0x00000035">
+					<ModuleInfo>
+						<Name TextId="TextID_3"/>
+						<InfoText TextId="InfoTextID_3"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="13" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_3" Length="16" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_3"/>
+								<InfoText TextId="InfoTextID_3"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--4. I.Safe	8-->
+				<ModuleItem ID="ID_MOD_4" ModuleIdentNumber="0x00000036">
+					<ModuleInfo>
+						<Name TextId="TextID_4"/>
+						<InfoText TextId="InfoTextID_4"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="14" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_4" Length="8" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_4"/>
+								<InfoText TextId="InfoTextID_4"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--5. I.IO	24-->
+				<ModuleItem ID="ID_MOD_5" ModuleIdentNumber="0x00000037">
+					<ModuleInfo>
+						<Name TextId="TextID_5"/>
+						<InfoText TextId="InfoTextID_5"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="15" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_5" Length="24" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_5"/>
+								<InfoText TextId="InfoTextID_5"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--6. I.Joint	144-->
+				<ModuleItem ID="ID_MOD_6" ModuleIdentNumber="0x00000038">
+					<ModuleInfo>
+						<Name TextId="TextID_6"/>
+						<InfoText TextId="InfoTextID_6"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="16" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_6" Length="144" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_6"/>
+								<InfoText TextId="InfoTextID_6"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--7. I.TCP	48-->
+				<ModuleItem ID="ID_MOD_7" ModuleIdentNumber="0x00000039">
+					<ModuleInfo>
+						<Name TextId="TextID_7"/>
+						<InfoText TextId="InfoTextID_7"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="17" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_7" Length="48" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_7"/>
+								<InfoText TextId="InfoTextID_7"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--8. I.Register.Bit	8-->
+				<ModuleItem ID="ID_MOD_8" ModuleIdentNumber="0x0000003A">
+					<ModuleInfo>
+						<Name TextId="TextID_8"/>
+						<InfoText TextId="InfoTextID_8"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="18" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_8" Length="8" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_8"/>
+								<InfoText TextId="InfoTextID_8"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--9. I.Register.IntReg1	24-->
+				<ModuleItem ID="ID_MOD_9" ModuleIdentNumber="0x0000003B">
+					<ModuleInfo>
+						<Name TextId="TextID_9"/>
+						<InfoText TextId="InfoTextID_9"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="19" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_9" Length="24" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_9"/>
+								<InfoText TextId="InfoTextID_9"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--10. I.Register.IntReg2	24-->
+				<ModuleItem ID="ID_MOD_10" ModuleIdentNumber="0x0000003C">
+					<ModuleInfo>
+						<Name TextId="TextID_10"/>
+						<InfoText TextId="InfoTextID_10"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="20" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_10" Length="24" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_10"/>
+								<InfoText TextId="InfoTextID_10"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--11. I.Register.IntReg3	24-->
+				<ModuleItem ID="ID_MOD_11" ModuleIdentNumber="0x0000003D">
+					<ModuleInfo>
+						<Name TextId="TextID_11"/>
+						<InfoText TextId="InfoTextID_11"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="21" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_11" Length="24" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_11"/>
+								<InfoText TextId="InfoTextID_11"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--12. I.Register.IntReg4	24-->
+				<ModuleItem ID="ID_MOD_12" ModuleIdentNumber="0x0000003E">
+					<ModuleInfo>
+						<Name TextId="TextID_12"/>
+						<InfoText TextId="InfoTextID_12"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="22" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_12" Length="24" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_12"/>
+								<InfoText TextId="InfoTextID_12"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--13. I.Register.FloatReg1	24-->
+				<ModuleItem ID="ID_MOD_13" ModuleIdentNumber="0x0000003F">
+					<ModuleInfo>
+						<Name TextId="TextID_13"/>
+						<InfoText TextId="InfoTextID_13"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="23" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_13" Length="24" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_13"/>
+								<InfoText TextId="InfoTextID_13"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--14. I.Register.FloatReg2	24-->
+				<ModuleItem ID="ID_MOD_14" ModuleIdentNumber="0x00000040">
+					<ModuleInfo>
+						<Name TextId="TextID_14"/>
+						<InfoText TextId="InfoTextID_14"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="24" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_14" Length="24" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_14"/>
+								<InfoText TextId="InfoTextID_14"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--15. I.Register.FloatReg3	24-->
+				<ModuleItem ID="ID_MOD_15" ModuleIdentNumber="0x00000041">
+					<ModuleInfo>
+						<Name TextId="TextID_15"/>
+						<InfoText TextId="InfoTextID_15"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="25" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_15" Length="24" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_15"/>
+								<InfoText TextId="InfoTextID_15"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--16. I.Register.FloatReg4	24-->
+				<ModuleItem ID="ID_MOD_16" ModuleIdentNumber="0x00000042">
+					<ModuleInfo>
+						<Name TextId="TextID_16"/>
+						<InfoText TextId="InfoTextID_16"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="26" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_16" Length="24" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_16"/>
+								<InfoText TextId="InfoTextID_16"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--17. O.Robot	24-->
+				<ModuleItem ID="ID_MOD_17" ModuleIdentNumber="0x00000043">
+					<ModuleInfo>
+						<Name TextId="TextID_17"/>
+						<InfoText TextId="InfoTextID_17"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="27" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="false">
+							<IOData>
+								<Output Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_17" Length="24" UseAsBits="true"/>
+								</Output>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_17"/>
+								<InfoText TextId="InfoTextID_17"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--18. O.Register.Bit	8-->
+				<ModuleItem ID="ID_MOD_18" ModuleIdentNumber="0x00000044">
+					<ModuleInfo>
+						<Name TextId="TextID_18"/>
+						<InfoText TextId="InfoTextID_18"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="28" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="false">
+							<IOData>
+								<Output Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_18" Length="8" UseAsBits="true"/>
+								</Output>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_18"/>
+								<InfoText TextId="InfoTextID_18"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--19. O.Register.IntReg1	24-->
+				<ModuleItem ID="ID_MOD_19" ModuleIdentNumber="0x00000045">
+					<ModuleInfo>
+						<Name TextId="TextID_19"/>
+						<InfoText TextId="InfoTextID_19"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="29" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="false">
+							<IOData>
+								<Output Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_19" Length="24" UseAsBits="true"/>
+								</Output>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_19"/>
+								<InfoText TextId="InfoTextID_19"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--20. O.Register.IntReg2	24-->
+				<ModuleItem ID="ID_MOD_20" ModuleIdentNumber="0x00000046">
+					<ModuleInfo>
+						<Name TextId="TextID_20"/>
+						<InfoText TextId="InfoTextID_20"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="30" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="false">
+							<IOData>
+								<Output Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_20" Length="24" UseAsBits="true"/>
+								</Output>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_20"/>
+								<InfoText TextId="InfoTextID_20"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--21. O.Register.IntReg3	24-->
+				<ModuleItem ID="ID_MOD_21" ModuleIdentNumber="0x00000047">
+					<ModuleInfo>
+						<Name TextId="TextID_21"/>
+						<InfoText TextId="InfoTextID_21"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="31" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="false">
+							<IOData>
+								<Output Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_21" Length="24" UseAsBits="true"/>
+								</Output>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_21"/>
+								<InfoText TextId="InfoTextID_21"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--22. O.Register.IntReg4	24-->
+				<ModuleItem ID="ID_MOD_22" ModuleIdentNumber="0x00000048">
+					<ModuleInfo>
+						<Name TextId="TextID_22"/>
+						<InfoText TextId="InfoTextID_22"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="32" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="false">
+							<IOData>
+								<Output Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_22" Length="24" UseAsBits="true"/>
+								</Output>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_22"/>
+								<InfoText TextId="InfoTextID_22"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--23. O.Register.FloatReg1	24-->
+				<ModuleItem ID="ID_MOD_23" ModuleIdentNumber="0x00000049">
+					<ModuleInfo>
+						<Name TextId="TextID_23"/>
+						<InfoText TextId="InfoTextID_23"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="33" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="false">
+							<IOData>
+								<Output Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_23" Length="24" UseAsBits="true"/>
+								</Output>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_23"/>
+								<InfoText TextId="InfoTextID_23"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--24. O.Register.FloatReg2	24-->
+				<ModuleItem ID="ID_MOD_24" ModuleIdentNumber="0x0000004A">
+					<ModuleInfo>
+						<Name TextId="TextID_24"/>
+						<InfoText TextId="InfoTextID_24"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="34" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="false">
+							<IOData>
+								<Output Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_24" Length="24" UseAsBits="true"/>
+								</Output>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_24"/>
+								<InfoText TextId="InfoTextID_24"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--25. O.Register.FloatReg3	24-->
+				<ModuleItem ID="ID_MOD_25" ModuleIdentNumber="0x0000004B">
+					<ModuleInfo>
+						<Name TextId="TextID_25"/>
+						<InfoText TextId="InfoTextID_25"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="35" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="false">
+							<IOData>
+								<Output Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_25" Length="24" UseAsBits="true"/>
+								</Output>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_25"/>
+								<InfoText TextId="InfoTextID_18"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--26. O.Register.FloatReg4	24-->
+				<ModuleItem ID="ID_MOD_26" ModuleIdentNumber="0x0000004C">
+					<ModuleInfo>
+						<Name TextId="TextID_26"/>
+						<InfoText TextId="InfoTextID_26"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="36" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="false">
+							<IOData>
+								<Output Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_26" Length="24" UseAsBits="true"/>
+								</Output>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_26"/>
+								<InfoText TextId="InfoTextID_26"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--27. I.STD.ROBOT.PLC	256-->
+				<ModuleItem ID="ID_MOD_27" ModuleIdentNumber="0x0000004D">
+					<ModuleInfo>
+						<Name TextId="TextID_27"/>
+						<InfoText TextId="InfoTextID_27"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="37" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="true">
+							<IOData>
+								<Input Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_27" Length="256" UseAsBits="true"/>
+								</Input>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_27"/>
+								<InfoText TextId="InfoTextID_27"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+                <!--28. O.STD.ROBOT.PLC	256-->
+				<ModuleItem ID="ID_MOD_28" ModuleIdentNumber="0x0000004E">
+					<ModuleInfo>
+						<Name TextId="TextID_28"/>
+						<InfoText TextId="InfoTextID_28"/>
+					</ModuleInfo>
+					<VirtualSubmoduleList>
+						<VirtualSubmoduleItem ID="38" SubmoduleIdentNumber="0x0001" API="0" MayIssueProcessAlarm="false">
+							<IOData>
+								<Output Consistency="All items consistency">
+									<DataItem DataType="OctetString" TextId="DataItem_28" Length="256" UseAsBits="true"/>
+								</Output>
+							</IOData>
+							<ModuleInfo>
+								<Name TextId="TextID_28"/>
+								<InfoText TextId="InfoTextID_28"/>
+							</ModuleInfo>
+						</VirtualSubmoduleItem>
+					</VirtualSubmoduleList>
+				</ModuleItem>
+			</ModuleList>
+			<GraphicsList>
+				<GraphicItem ID="ID_Graph_1" GraphicFile="GSDML-0004-0005-DOBOT"/>
+			</GraphicsList>
+            <CategoryList>
+                <CategoryItem ID="ID_PND_LinuxNative" TextId="TOK_ID_PL"/>
+            </CategoryList>
+			<ExternalTextList>
+				<PrimaryLanguage>
+
+					<!--Linux Native & Dap Info-->
+
+                    <Text TextId="TOK_ID_PL" Value="PROFINET Driver"/>
+					<Text TextId="CR_FamilyDescription" Value="Dobot CR"/>
+					<Text TextId="TOK_TextId_Module_Name_Linux_Native" Value="CR series"/>
+					<Text TextId="TOK_TextId_Interface_Name_Linux_Native" Value="interface"/>
+					<Text TextId="TOK_InfoTextId_Info_Linux_Native" Value="PROFINET Driver Linux Native Development Kit"/>
+
+					<!--port name-->
+					<Text TextId="TOK_Subslot_8000" Value="X1"/>
+					<Text TextId="TOK_Text_Id_Port_RJ45_Desc" Value="Port - RJ-45"/>
+
+					<!--module name-->
+					<Text TextId="TextID_1" Value="01. I.RobotStatus.status1"/>
+					<Text TextId="TextID_2" Value="02. I.RobotStatus.status2"/>
+					<Text TextId="TextID_3" Value="03. I.RobotStatus.Load"/>
+					<Text TextId="TextID_4" Value="04. I.Safe"/>
+					<Text TextId="TextID_5" Value="05. I.IO"/>
+					<Text TextId="TextID_6" Value="06. I.Joint"/>
+					<Text TextId="TextID_7" Value="07. I.TCP"/>
+					<Text TextId="TextID_8" Value="08. I.Register.Bit"/>
+					<Text TextId="TextID_9" Value="09. I.Register.IntReg1"/>
+					<Text TextId="TextID_10" Value="10. I.Register.IntReg2"/>
+					<Text TextId="TextID_11" Value="11. I.Register.IntReg3"/>
+					<Text TextId="TextID_12" Value="12. I.Register.IntReg4"/>
+					<Text TextId="TextID_13" Value="13. I.Register.FloatReg1"/>
+					<Text TextId="TextID_14" Value="14. I.Register.FloatReg2"/>
+					<Text TextId="TextID_15" Value="15. I.Register.FloatReg3"/>
+					<Text TextId="TextID_16" Value="16. I.Register.FloatReg4"/>
+					<Text TextId="TextID_17" Value="17. O.Robot"/>
+					<Text TextId="TextID_18" Value="18. O.Register.Bit"/>
+					<Text TextId="TextID_19" Value="19. O.Register.IntReg1"/>
+					<Text TextId="TextID_20" Value="20. O.Register.IntReg2"/>
+					<Text TextId="TextID_21" Value="21. O.Register.IntReg3"/>
+					<Text TextId="TextID_22" Value="22. O.Register.IntReg4"/>
+					<Text TextId="TextID_23" Value="23. O.Register.FloatReg1"/>
+					<Text TextId="TextID_24" Value="24. O.Register.FloatReg2"/>
+					<Text TextId="TextID_25" Value="25. O.Register.FloatReg3"/>
+					<Text TextId="TextID_26" Value="26. O.Register.FloatReg4"/>
+					<Text TextId="TextID_27" Value="27. I.STD.ROBOT.PLC"/>
+					<Text TextId="TextID_28" Value="28. O.STD.ROBOT.PLC"/>
+
+					<!--module info name-->
+					<Text TextId="InfoTextID_1" Value="01. I.RobotStatus.status1 - ModuleIdentNumber:0x33 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_2" Value="02. I.RobotStatus.status2 - ModuleIdentNumber:0x34 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_3" Value="03. I.RobotStatus.Load - ModuleIdentNumber:0x35 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_4" Value="04. I.Safe - ModuleIdentNumber:0x36 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_5" Value="05. I.IO - ModuleIdentNumber:0x37 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_6" Value="06. I.Joint - ModuleIdentNumber:0x38 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_7" Value="07. I.TCP - ModuleIdentNumber:0x39 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_8" Value="08. I.Register.Bit - ModuleIdentNumber:0x3A - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_9" Value="09. I.Register.IntReg1 - ModuleIdentNumber:0x3B - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_10" Value="10. I.Register.IntReg2 - ModuleIdentNumber:0x3C - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_11" Value="11. I.Register.IntReg3 - ModuleIdentNumber:0x3D - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_12" Value="12. I.Register.IntReg4 - ModuleIdentNumber:0x3E - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_13" Value="13. I.Register.FloatReg1 - ModuleIdentNumber:0x3F - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_14" Value="14. I.Register.FloatReg2 - ModuleIdentNumber:0x40 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_15" Value="15. I.Register.FloatReg3 - ModuleIdentNumber:0x41 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_16" Value="16. I.Register.FloatReg4 - ModuleIdentNumber:0x42 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_17" Value="17. O.Robot - ModuleIdentNumber:0x43 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_18" Value="18. O.Register.Bit - ModuleIdentNumber:0x44 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_19" Value="19. O.Register.IntReg1 - ModuleIdentNumber:0x45 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_20" Value="20. O.Register.IntReg2 - ModuleIdentNumber:0x46 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_21" Value="21. O.Register.IntReg3 - ModuleIdentNumber:0x47 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_22" Value="22. O.Register.IntReg4 - ModuleIdentNumber:0x48 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_23" Value="23. O.Register.FloatReg1 - ModuleIdentNumber:0x49 - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_24" Value="24. O.Register.FloatReg2 - ModuleIdentNumber:0x4A - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_25" Value="25. O.Register.FloatReg3 - ModuleIdentNumber:0x4B - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_26" Value="26. O.Register.FloatReg4 - ModuleIdentNumber:0x4C - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_27" Value="27. I.STD.ROBOT.PLC - ModuleIdentNumber:0x4D - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+					<Text TextId="InfoTextID_28" Value="28. O.STD.ROBOT.PLC - ModuleIdentNumber:0x4E - SubmoduleIdentNumber:0x0001 - API:0x00"/>
+
+					<!--dataitem name-->
+					<Text TextId="DataItem_1" Value="01. I.RobotStatus.status1 - 8bytes"/>
+					<Text TextId="DataItem_2" Value="02. I.RobotStatus.status2 - 24bytes"/>
+					<Text TextId="DataItem_3" Value="03. I.RobotStatus.Load - 16bytes"/>
+					<Text TextId="DataItem_4" Value="04. I.Safe - 8bytes"/>
+					<Text TextId="DataItem_5" Value="05. I.IO - 24bytes"/>
+					<Text TextId="DataItem_6" Value="06. I.Joint - 144bytes"/>
+					<Text TextId="DataItem_7" Value="07. I.TCP - 48bytes"/>
+					<Text TextId="DataItem_8" Value="08. I.Register.Bit - 8bytes"/>
+					<Text TextId="DataItem_9" Value="09. I.Register.IntReg1 - 24bytes"/>
+					<Text TextId="DataItem_10" Value="10. I.Register.IntReg2 - 24bytes"/>
+					<Text TextId="DataItem_11" Value="11. I.Register.IntReg3 - 24bytes"/>
+					<Text TextId="DataItem_12" Value="12. I.Register.IntReg4 - 24bytes"/>
+					<Text TextId="DataItem_13" Value="13. I.Register.FloatReg1 - 24bytes"/>
+					<Text TextId="DataItem_14" Value="14. I.Register.FloatReg2 - 24bytes"/>
+					<Text TextId="DataItem_15" Value="15. I.Register.FloatReg3 - 24bytes"/>
+					<Text TextId="DataItem_16" Value="16. I.Register.FloatReg4 - 24bytes"/>
+					<Text TextId="DataItem_17" Value="17. O.Robot - 24bytes"/>
+					<Text TextId="DataItem_18" Value="18. O.Register.Bit - 8bytes"/>
+					<Text TextId="DataItem_19" Value="19. O.Register.IntReg1 - 24bytes"/>
+					<Text TextId="DataItem_20" Value="20. O.Register.IntReg2 - 24bytes"/>
+					<Text TextId="DataItem_21" Value="21. O.Register.IntReg3 - 24bytes"/>
+					<Text TextId="DataItem_22" Value="22. O.Register.IntReg4 - 24bytes"/>
+					<Text TextId="DataItem_23" Value="23. O.Register.FloatReg1 - 24bytes"/>
+					<Text TextId="DataItem_24" Value="24. O.Register.FloatReg2 - 24bytes"/>
+					<Text TextId="DataItem_25" Value="25. O.Register.FloatReg3 - 24bytes"/>
+					<Text TextId="DataItem_26" Value="26. O.Register.FloatReg4 - 24bytes"/>
+					<Text TextId="DataItem_27" Value="27. I.STD.ROBOT.PLC - 256bytes"/>
+					<Text TextId="DataItem_28" Value="28. O.STD.ROBOT.PLC - 256bytes"/>
+
+					<!--other text definitions-->
+					<Text TextId="T_general_parameter" Value="general parameter"/>
+				</PrimaryLanguage>
+			</ExternalTextList>
+		</ApplicationProcess>
+	</ProfileBody>
+</ISO15745Profile>

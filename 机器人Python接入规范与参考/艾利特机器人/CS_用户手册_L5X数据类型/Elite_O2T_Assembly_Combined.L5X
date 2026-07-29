@@ -1,0 +1,78 @@
+﻿<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="18.02" TargetName="Elite_O2T_Assembly_Combined" TargetType="DataType" ContainsContext="true" Owner="2827138147@qq.com, aa" ExportDate="Mon Dec 09 17:13:05 2024" ExportOptions="References DecoratedData Context Dependencies AllProjDocTrans">
+<Controller Use="Context" Name="ddddd">
+<DataTypes Use="Context">
+<DataType Name="Elite_Float_Registers" Family="NoFamily" Class="User">
+<Description>
+<![CDATA[Elite robot float registers]]>
+</Description>
+<Members>
+<Member Name="Registers" DataType="REAL" Dimension="24" Radix="Float" Hidden="false" ExternalAccess="Read/Write"/>
+</Members>
+</DataType>
+<DataType Name="Elite_O2T_Tool_IO" Family="NoFamily" Class="User">
+<Description>
+<![CDATA[Elite robot's tool IO]]>
+</Description>
+<Members>
+<Member Name="Tool_digital_IO_setting_enable" DataType="SINT" Dimension="0" Radix="Hex" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Tool_digital_IO_mode_set" DataType="SINT" Dimension="0" Radix="Hex" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Tool_digital_IO_enable_set" DataType="SINT" Dimension="0" Radix="Hex" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Tool_digital_IO_output_mode_set" DataType="SINT" Dimension="0" Radix="Hex" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Tool_digital_IO_is_output_set" DataType="SINT" Dimension="0" Radix="Hex" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Tool_digital_IO_value_set" DataType="SINT" Dimension="0" Radix="Hex" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Reserver" DataType="INT" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write"/>
+</Members>
+</DataType>
+<DataType Name="Elite_O2T_Board_IO" Family="NoFamily" Class="User">
+<Description>
+<![CDATA[Robot's board IO]]>
+</Description>
+<Members>
+<Member Name="Speed_slider_fraction_mask" DataType="DINT" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Speed_slider_fraction" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Standard_digital_output_setting_enable" DataType="INT" Dimension="0" Radix="Hex" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Standard_digital_output_value" DataType="INT" Dimension="0" Radix="Hex" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Configure_digital_output_setting_enable" DataType="SINT" Dimension="0" Radix="Hex" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Configure_digital_output_value" DataType="SINT" Dimension="0" Radix="Hex" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Standard_analog_output_setting_enable" DataType="SINT" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Standard_analog_output_type_set" DataType="SINT" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Standard_analog_output_value_0_set" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Standard_analog_output_value_1_set" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write"/>
+</Members>
+</DataType>
+<DataType Name="Elite_Bit_Registers" Family="NoFamily" Class="User">
+<Description>
+<![CDATA[Elite robot bit registers]]>
+</Description>
+<Members>
+<Member Name="Registers" DataType="BOOL" Dimension="64" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write"/>
+</Members>
+</DataType>
+<DataType Use="Target" Name="Elite_O2T_Assembly_Combined" Family="NoFamily" Class="User">
+<Members>
+<Member Name="Board_IO" DataType="Elite_O2T_Board_IO" Dimension="0" Radix="NullType" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Tool_IO" DataType="Elite_O2T_Tool_IO" Dimension="0" Radix="NullType" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Bool_registers" DataType="Elite_Bit_Registers" Dimension="0" Radix="NullType" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Int_registers" DataType="Elite_Int_Registers" Dimension="0" Radix="NullType" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Float_registers" DataType="Elite_Float_Registers" Dimension="0" Radix="NullType" Hidden="false" ExternalAccess="Read/Write"/>
+</Members>
+<Dependencies>
+<Dependency Type="DataType" Name="Elite_O2T_Board_IO"/>
+<Dependency Type="DataType" Name="Elite_O2T_Tool_IO"/>
+<Dependency Type="DataType" Name="Elite_Bit_Registers"/>
+<Dependency Type="DataType" Name="Elite_Int_Registers"/>
+<Dependency Type="DataType" Name="Elite_Float_Registers"/>
+</Dependencies>
+</DataType>
+<DataType Name="Elite_Int_Registers" Family="NoFamily" Class="User">
+<Description>
+<![CDATA[Elite robot int registers]]>
+</Description>
+<Members>
+<Member Name="Registers" DataType="DINT" Dimension="24" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write"/>
+</Members>
+</DataType>
+</DataTypes>
+</Controller>
+</RSLogix5000Content>

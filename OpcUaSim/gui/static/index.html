@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-cn">
+<head>
+  <meta charset="utf-8"/>
+  <title>OpcUaSim 控制面板</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">⚙️</span>
+    <h1>OpcUaSim 控制面板</h1>
+    <span class="sub">InoProShop MCP · OPC UA 仿真 · 握手代理</span>
+  </div>
+  <div class="status" id="topStatus">
+    <span id="buildBadge" title="点一下查看后端 /api/version" style="color:#3ecf8e;font-size:11px;margin-right:14px;cursor:pointer">build ?</span>
+    <span class="dot" id="dotMcp" title="MCP"></span> MCP
+    <span class="dot" id="dotServer" title="Server"></span> Server
+    <span class="dot" id="dotAgent" title="Agent"></span> Agent
+    <span class="busy" id="topBusy"></span>
+  </div>
+</header>
+
+<section class="projectbar">
+  <label>项目 (.project)</label>
+  <input id="projectPath" type="text" placeholder="拖入或粘贴 .project 绝对路径" spellcheck="false"/>
+  <button id="btnOpen" class="primary">打开</button>
+  <button id="btnClose">断开 MCP</button>
+  <span class="spacer"></span>
+  <button id="btnSave" title="save_project">💾 保存</button>
+  <button id="btnCompile" title="compile_project">🛠 编译</button>
+  <button id="btnDownload" title="save + compile (可选在线)">⬇️ 下载</button>
+  <select id="dlStrategy">
+    <option value="save_compile">save + compile</option>
+    <option value="online">online (IronPython 尝试)</option>
+  </select>
+</section>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="extract">① 提取变量 → CSV</button>
+  <button class="tab" data-tab="edit">② 编辑程序块</button>
+  <button class="tab" data-tab="sim">③ 仿真运行</button>
+  <button class="tab" data-tab="pipeline">🚀 一键流水线</button>
+</nav>
+
+<main>
+  <!-- ================= 提取 ================= -->
+  <section class="panel active" id="tab-extract">
+    <div class="row">
+      <button id="btnDiscover">🔍 自动发现 GVL</button>
+      <span class="hint">或在下方手动填 GVL 路径（每行一个，例如 <code>Application/GVL_XUSE</code>）</span>
+    </div>
+    <div class="row two-col">
+      <div>
+        <label>已发现的 GVL（勾选要抽取的）</label>
+        <div id="gvlList" class="gvl-list">（尚未发现）</div>
+      </div>
+      <div>
+        <label>或手动 GVL 路径</label>
+        <textarea id="gvlManual" rows="8" placeholder="Application/GVL_XUSE&#10;Application/Folder_A/GVL_Motor"></textarea>
+      </div>
+    </div>
+
+    <div class="row">
+      <label><input type="checkbox" id="chkAll"/> 全部变量（含无 <code>{attribute 'symbol'}</code> 的）</label>
+      <label><input type="checkbox" id="chkExpandStructs" checked/> 展开数组 &amp; 结构体（生成 <code>变量[i].字段</code> 形式叶子）</label>
+    </div>
+    <div class="row">
+      <label>ns= <input type="number" id="numNs" value="4" style="width:60px"/></label>
+      <label>前缀 s= <input type="text" id="txtNsPrefix" value="uniab|" style="width:100px"/></label>
+      <span class="hint">NodeId 会拼成 <code>ns=&lt;ns&gt;;s=&lt;prefix&gt;&lt;PLC 变量原名&gt;</code>，对齐真实 InoProShop 导出格式</span>
+    </div>
+
+    <div class="row">
+      <label>输出 CSV 路径（留空 = <code>extracted/&lt;项目名&gt;.csv</code>）</label>
+      <input id="txtCsvOut" type="text" style="flex:1" placeholder="留空自动"/>
+      <button id="btnPreview">预览</button>
+      <button id="btnExtract" class="primary">提取并写 CSV</button>
+    </div>
+
+    <div id="extractResult" class="result"></div>
+    <div class="table-wrap"><table id="previewTable"></table></div>
+  </section>
+
+  <!-- ================= 编辑 ================= -->
+  <section class="panel" id="tab-edit">
+    <div class="row">
+      <button id="btnDiscoverEditables" class="primary">🔎 发现 POU / GVL / DUT</button>
+      <button id="btnRefreshEditables" title="强制重新扫描（约 20s）">🔄 强制刷新</button>
+      <button id="btnStructure">📂 项目结构树 (原始)</button>
+      <span class="hint">点左侧列表条目 = 自动填路径 + 立即读取；也可自己在输入框敲路径</span>
+    </div>
+    <div class="row two-col edit-grid">
+      <div class="edit-left">
+        <div class="row" style="margin-bottom:6px">
+          <input id="editablesFilter" type="text" placeholder="按名字过滤…" style="flex:1"/>
+          <label style="font-size:12px;color:#888"><input type="checkbox" id="chkKindPOU" checked/>POU</label>
+          <label style="font-size:12px;color:#888"><input type="checkbox" id="chkKindGVL" checked/>GVL</label>
+          <label style="font-size:12px;color:#888"><input type="checkbox" id="chkKindDUT" checked/>DUT</label>
+        </div>
+        <div id="editablesList" class="editables">（先点上面 <b>发现</b>）</div>
+        <details class="raw-structure">
+          <summary>原始项目结构树</summary>
+          <pre id="structureBox" class="mono readonly">（点 📂 按钮拉取）</pre>
+        </details>
+      </div>
+      <div class="edit-right">
+        <div class="row">
+          <input id="pouPath" type="text" placeholder="POU 路径, 例: Application/GVL_XUSE 或 Application/POU_1" style="flex:1"/>
+          <button id="btnGetPou">读取</button>
+          <span id="pouKindBadge" class="badge"></span>
+        </div>
+        <label>声明 (VAR ... END_VAR)</label>
+        <textarea id="pouDecl" rows="12" spellcheck="false"></textarea>
+        <label>实现 (ST 代码；仅 POU 有)</label>
+        <textarea id="pouImpl" rows="12" spellcheck="false"></textarea>
+        <div class="row">
+          <label><input type="checkbox" id="chkSetSave" checked/> 写完自动 save</label>
+          <label><input type="checkbox" id="chkSetCompile"/> 写完自动编译</label>
+          <button id="btnSetPou" class="primary">写回</button>
+        </div>
+        <div id="setPouResult" class="result"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 仿真 ================= -->
+  <section class="panel" id="tab-sim">
+    <div class="row">
+      <label>CSV（最近提取结果优先）</label>
+      <input id="simCsv" type="text" style="flex:1" placeholder="留空 = 最近提取结果或内置演示表"/>
+    </div>
+    <div class="row">
+      <label>Host <input id="simHost" type="text" value="0.0.0.0" style="width:120px"/></label>
+      <label>Port <input id="simPort" type="number" value="4855" style="width:80px"/></label>
+      <label>ns= <input id="simNs" type="number" value="4" style="width:60px"/></label>
+      <label><input type="checkbox" id="simOcc" checked/> 占位/空闲 初值置 TRUE</label>
+    </div>
+    <div class="row">
+      <button id="btnServerStart" class="primary">▶️ 启动 Server</button>
+      <button id="btnServerStop">⏹ 停止 Server</button>
+      <span class="pid">Server PID: <b id="pidServer">—</b></span>
+    </div>
+    <hr/>
+    <div class="row">
+      <label>握手代理 CSV（一般与 Server 相同）</label>
+      <input id="agentCsv" type="text" style="flex:1" placeholder="留空 = Server 输入、最近提取结果或演示表"/>
+    </div>
+    <div class="row">
+      <label>Agent Host <input id="agentHost" type="text" value="127.0.0.1" style="width:120px"/></label>
+      <label>Port <input id="agentPort" type="number" value="4855" style="width:80px"/></label>
+      <label>Config (可选 yaml) <input id="agentCfg" type="text" style="width:220px" placeholder="config.yaml 路径"/></label>
+    </div>
+    <div class="row">
+      <button id="btnAgentStart" class="primary">▶️ 启动 Handshake Agent</button>
+      <button id="btnAgentStop">⏹ 停止 Agent</button>
+      <span class="pid">Agent PID: <b id="pidAgent">—</b></span>
+    </div>
+  </section>
+
+  <!-- ================= 一键 ================= -->
+  <section class="panel" id="tab-pipeline">
+    <p class="hint">按顺序执行：<b>extract → 启动 Server</b>（可选跟进 <b>Handshake Agent</b>）。请先在顶部打开项目。</p>
+    <div class="row">
+      <label><input type="checkbox" id="plAll"/> 全部变量</label>
+      <label>Host <input id="plHost" type="text" value="0.0.0.0" style="width:120px"/></label>
+      <label>Port <input id="plPort" type="number" value="4855" style="width:80px"/></label>
+      <label><input type="checkbox" id="plAgent"/> 并起 Handshake Agent</label>
+      <span class="hint">ns / prefix 沿用 ① 页面里填的</span>
+    </div>
+    <div class="row">
+      <button id="btnPipeline" class="primary big">🚀 走起</button>
+    </div>
+    <div id="pipelineResult" class="result"></div>
+  </section>
+</main>
+
+<div id="logResizer" class="log-resizer" title="拖拽调整日志高度"></div>
+<section class="logbar" id="logbar">
+  <div class="loghead">
+    <b>实时日志</b>
+    <select id="logLevel"><option value="0">全部</option><option value="20">INFO+</option><option value="30">WARN+</option><option value="40">ERROR</option></select>
+    <input id="logFilter" type="text" placeholder="过滤关键字..." style="width:180px"/>
+    <label><input type="checkbox" id="autoScroll" checked/> 自动滚动</label>
+    <button id="btnClearLog">清空</button>
+    <button id="btnLogCollapse" title="折叠/展开日志">▾</button>
+    <span class="conn" id="sseState">🔴 未连接</span>
+  </div>
+  <div id="logBox" class="logbox"></div>
+</section>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+
+<html :class="{'dark': darkMode === 'dark' || (darkMode === 'system' &amp;&amp; window.matchMedia('(prefers-color-scheme: dark)').matches)}" class="scroll-smooth" lang="zh" x-data="{ darkMode: localStorage.getItem('darkMode') || localStorage.setItem('darkMode', 'system'), activeSection: '' }" x-init="$watch('darkMode', val =&gt; localStorage.setItem('darkMode', val))">
+<head>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<meta charset="utf-8"/>
+<meta content="white" media="(prefers-color-scheme: light)" name="theme-color"/>
+<meta content="black" metia="(prefers-color-scheme: dark)" name="theme-color"/>
+<meta content="Docutils 0.18.1: http://docutils.sourceforge.net/" name="generator"/>
+<title>TCP及IP接口 | DUCO Core接口说明书</title>
+<meta content="TCP及IP接口 | DUCO Core接口说明书" property="og:title"/>
+<meta content="TCP及IP接口 | DUCO Core接口说明书" name="twitter:title"/>
+<link href="../_static/pygments.css?v=8d216cef" rel="stylesheet" type="text/css"/>
+<link href="../_static/theme.css?v=cede9724" rel="stylesheet" type="text/css"/>
+<link href="../_static/design-style.1e8bd061cd6da7fc9cf755528e8ffc24.min.css?v=0a3b3ea7" rel="stylesheet" type="text/css"/>
+<link href="../_static/custom.css?v=1c590207" rel="stylesheet" type="text/css"/>
+<link href="../_static/awesome-sphinx-design.css?v=a54cf077" rel="stylesheet" type="text/css"/>
+<link href="../_static/favicon.ico" rel="icon"/>
+<link href="../search.html" rel="search" title="搜索"/>
+<link href="../02Modbus%20TCP%20Server/index.html" rel="next" title="Modbus TCP Server"/>
+<link href="../index.html" rel="prev" title="接口使用说明"/>
+<script>
+    <!-- Prevent Flash of wrong theme -->
+      const userPreference = localStorage.getItem('darkMode');
+      let mode;
+      if (userPreference === 'dark' || window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        mode = 'dark';
+        document.documentElement.classList.add('dark');
+      } else {
+        mode = 'light';
+      }
+      if (!userPreference) {localStorage.setItem('darkMode', mode)}
+    </script>
+</head>
+<body :class="{ 'overflow-hidden': showSidebar }" class="min-h-screen font-sans antialiased bg-background text-foreground" x-data="{ showSidebar: false }">
+<div @click.self="showSidebar = false" class="fixed inset-0 z-50 overflow-hidden bg-background/80 backdrop-blur-sm md:hidden" x-cloak="" x-show="showSidebar"></div><div class="relative flex flex-col min-h-screen" id="page"><a class="absolute top-0 left-0 z-[100] block bg-background p-4 text-xl transition -translate-x-full opacity-0 focus:translate-x-0 focus:opacity-100" href="#content">
+      Skip to content
+    </a><header class="sticky top-0 z-40 w-full border-b shadow-sm border-border supports-backdrop-blur:bg-background/60 bg-background/95 backdrop-blur" style="backdrop-filter: blur(30px);box-shadow: 0px 4px 8px 0px rgba(0,0,0,0.06);"><div class="container flex items-center h-14">
+<div class="hidden mr-4 md:flex">
+<a class="flex items-center mr-6" href="/zh/index.html">
+<img alt="Logo" class="mr-2 dark:invert" src="../_static/logo.svg" style="height: 16px;"/>
+</a></div><button @click="showSidebar = true" class="inline-flex items-center justify-center h-10 px-0 py-2 mr-2 text-base font-medium transition-colors rounded-md hover:text-accent-foreground hover:bg-transparent md:hidden" type="button">
+<svg aria-hidden="true" fill="currentColor" height="24" viewbox="0 96 960 960" width="24" xmlns="http://www.w3.org/2000/svg">
+<path d="M152.587 825.087q-19.152 0-32.326-13.174t-13.174-32.326q0-19.152 13.174-32.326t32.326-13.174h440q19.152 0 32.326 13.174t13.174 32.326q0 19.152-13.174 32.326t-32.326 13.174h-440Zm0-203.587q-19.152 0-32.326-13.174T107.087 576q0-19.152 13.174-32.326t32.326-13.174h320q19.152 0 32.326 13.174T518.087 576q0 19.152-13.174 32.326T472.587 621.5h-320Zm0-203.587q-19.152 0-32.326-13.174t-13.174-32.326q0-19.152 13.174-32.326t32.326-13.174h440q19.152 0 32.326 13.174t13.174 32.326q0 19.152-13.174 32.326t-32.326 13.174h-440ZM708.913 576l112.174 112.174q12.674 12.674 12.674 31.826t-12.674 31.826Q808.413 764.5 789.261 764.5t-31.826-12.674l-144-144Q600 594.391 600 576t13.435-31.826l144-144q12.674-12.674 31.826-12.674t31.826 12.674q12.674 12.674 12.674 31.826t-12.674 31.826L708.913 576Z"></path>
+</svg>
+<span class="sr-only">Toggle navigation menu</span>
+</button>
+<div class="flex items-center justify-between flex-1 space-x-2 sm:space-x-4 md:justify-end">
+<div class="flex-1 w-full md:w-auto md:flex-none"><form @keydown.k.window.meta="$refs.search.focus()" action="../search.html" class="relative flex items-center group" id="searchbox" method="get">
+<input aria-label="Search the docs" class="inline-flex items-center font-medium transition-colors bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background border border-input hover:bg-accent focus:bg-accent hover:text-accent-foreground focus:text-accent-foreground hover:placeholder-accent-foreground py-2 px-4 relative h-9 w-full justify-start rounded-[0.5rem] text-sm text-muted-foreground md:w-40 lg:w-64" id="search-input" name="q" placeholder="Search ..." type="search" x-ref="search"/>
+
+</form>
+</div>
+<nav class="flex items-center space-x-1">
+</nav>
+</div><div class="navbar-top main-header-right" style="display: flex;">
+<div class="navbar-item has-dropdown module">
+<img height="24px" src="/_static/doc.svg"/>
+<a class="navbar-link" href="#">切换手册</a>
+<div class="navbar-dropdown">
+</div>
+</div>
+<div class="navbar-item has-dropdown language">
+<img height="24px" src="/_static/lang.svg"/>
+<a class="navbar-link" href="#">简体中文</a>
+<div class="navbar-dropdown">
+</div>
+</div>
+<div class="navbar-item">
+<img class="download-icon" height="24px" src="/_static/download.svg"/>
+<a class="button" href="/zh/download.html">下载手册</a>
+</div>
+</div>
+</div>
+</header>
+<div class="flex-1"><div class="container flex-1 items-start md:grid md:grid-cols-[220px_minmax(0,1fr)] md:gap-6 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-10"><aside :aria-hidden="!showSidebar" :class="{ 'translate-x-0': showSidebar }" class="fixed inset-y-0 left-0 md:top-14 z-50 md:z-30 bg-background md:bg-transparent transition-all duration-100 -translate-x-full md:translate-x-0 ml-0 p-6 md:p-0 md:-ml-2 md:h-[calc(100vh-3.5rem)] w-5/6 md:w-full shrink-0 overflow-y-auto border-r border-border md:sticky" id="left-sidebar">
+<div style="margin-top: 20px;"><div class="page-versions">
+<button id="version-menu-toggle">
+<span class="text"></span>
+<svg height="18" shape-rendering="geometricPrecision" viewbox="0 0 18 18" width="18" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><g id="frame-QqHB-9"><path d="M1.0575 0L0 1.0575L3.435 4.5L0 7.9425L1.0575 9L5.5575 4.5L1.0575 0Z" fill="#000000" shape-rendering="geometricPrecision" style="fill-rule:evenodd" transform="matrix(6.123233995736766e-17 1 -1 6.123233995736766e-17 13.5 6.442500114440918)"></path></g></svg> </button>
+<div id="version-menu">
+</div>
+</div>
+</div>
+<div class="relative overflow-hidden md:overflow-auto my-4 md:my-0 h-[calc(100vh-8rem)] md:h-auto">
+<div class="overflow-y-auto h-full w-full relative pr-6"><nav class="table w-full min-w-full my-6 lg:my-8">
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">TCP/IP接口</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../02Modbus%20TCP%20Server/index.html">ModbusTCP Server</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../03%E9%85%8D%E6%96%B9%E6%8E%A5%E5%8F%A3/index.html">配方接口</a></li>
+<li class="toctree-l1" x-data="{ expanded: $el.classList.contains('current') ? true : false }"><a :class="{ 'expanded' : expanded }" @click="expanded = !expanded" class="reference internal expandable" href="../04profinet%20device%20%E6%8E%A5%E5%8F%A3/index.html">Profinet<button @click.prevent.stop="expanded = !expanded" type="button"><span class="sr-only"></span><svg fill="currentColor" height="18px" stroke="none" viewbox="0 0 24 24" width="18px" xmlns="http://www.w3.org/2000/svg"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"></path></svg></button></a><ul x-show="expanded">
+<li class="toctree-l2"><a class="reference internal" href="../04profinet%20device%20%E6%8E%A5%E5%8F%A3/01Profinet%20device%E6%8E%A5%E5%8F%A3%E9%85%8D%E7%BD%AE/index.html">Profinet device接口配置</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../04profinet%20device%20%E6%8E%A5%E5%8F%A3/02Slot%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84/index.html">Slot数据结构</a></li>
+</ul>
+</li>
+<li class="toctree-l1" x-data="{ expanded: $el.classList.contains('current') ? true : false }"><a :class="{ 'expanded' : expanded }" @click="expanded = !expanded" class="reference internal expandable" href="../05Ethernet_IP%E6%8E%A5%E5%8F%A3/index.html">EthernetIP<button @click.prevent.stop="expanded = !expanded" type="button"><span class="sr-only"></span><svg fill="currentColor" height="18px" stroke="none" viewbox="0 0 24 24" width="18px" xmlns="http://www.w3.org/2000/svg"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"></path></svg></button></a><ul x-show="expanded">
+<li class="toctree-l2"><a class="reference internal" href="../05Ethernet_IP%E6%8E%A5%E5%8F%A3/01Ethernet%E5%8F%8AIP%E6%8E%A5%E5%8F%A3%E9%85%8D%E7%BD%AE/index.html">Ethernet及IP接口配置</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../05Ethernet_IP%E6%8E%A5%E5%8F%A3/02%E9%BB%98%E8%AE%A4%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84/index.html">默认数据结构</a></li>
+</ul>
+</li>
+</ul>
+</nav>
+</div>
+</div>
+<button @click="showSidebar = false" class="absolute md:hidden right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100" type="button">
+<svg class="h-4 w-4" fill="currentColor" height="24" stroke="none" viewbox="0 96 960 960" width="24" xmlns="http://www.w3.org/2000/svg">
+<path d="M480 632 284 828q-11 11-28 11t-28-11q-11-11-11-28t11-28l196-196-196-196q-11-11-11-28t11-28q11-11 28-11t28 11l196 196 196-196q11-11 28-11t28 11q11 11 11 28t-11 28L536 576l196 196q11 11 11 28t-11 28q-11 11-28 11t-28-11L480 632Z"></path>
+</svg>
+</button>
+</aside>
+<main class="relative py-6 lg:gap-10 lg:py-8 xl:grid xl:grid-cols-[1fr_300px]">
+<div class="w-full min-w-0 mx-auto"><div style="display: flex; justify-content: space-between;">
+<nav aria-label="breadcrumbs" class="flex items-center mb-4 space-x-1 text-sm text-muted-foreground">
+<a class="overflow-hidden text-ellipsis whitespace-nowrap hover:text-foreground" href="../index.html">
+<span class="hidden md:inline">DUCO Core接口说明书</span>
+<svg aria-label="Home" class="md:hidden" fill="currentColor" height="18" stroke="none" viewbox="0 96 960 960" width="18" xmlns="http://www.w3.org/2000/svg">
+<path d="M240 856h120V616h240v240h120V496L480 316 240 496v360Zm-80 80V456l320-240 320 240v480H520V696h-80v240H160Zm320-350Z"></path>
+</svg>
+</a>
+<div class="mr-1">/</div><span aria-current="page" class="font-medium text-foreground overflow-hidden text-ellipsis whitespace-nowrap">TCP及IP接口</span>
+</nav>
+
+</div>
+<div id="content" role="main">
+<section id="tcpip">
+<h1>TCP及IP接口<a class="headerlink" href="#tcpip" title="此标题的永久链接"><span>#</span></a></h1>
+<p>机器人在上电状态下会作为TCP Server监听端口：2000和2001的连接。端口2000可接收对机器人的控制命令及返回状态。端口2001会以10Hz的频率向外部发送机器人当前的状态信息。</p>
+<section id="id1">
+<h2>2000端口<a class="headerlink" href="#id1" title="此标题的永久链接" x-intersect.margin.0%.0%.-70%.0%="activeSection = '#id1'"><span>#</span></a></h2>
+<p>2000端口采用请求-响应式的应答机制，可以接受系统指令。
+Client和Server间的通讯协议如下：</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>接收的指令</p></th>
+<th class="head"><p>返回值</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>run(程序名) 或</p>
+<p>run(程序名 ,
+速度百分比)</p>
+</td>
+<td><p>开始时反馈：run start</p>
+<p>执行失败反馈：run fail</p>
+<p>执行完成反馈：script finish</p>
+</td>
+<td><p>机器人会执行相应程序，不设置速度百分比或者</p>
+<p>速度百分比参数无效时，使用当前速度运行。</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>&lt;start&gt;脚本&lt;end&gt;</p></td>
+<td><p>接收到&lt;start&gt;反馈：
+prog mode start</p>
+<p>接收到&lt;end&gt;反馈：prog mode end</p>
+<p>执行失败反馈：run fail</p>
+<p>执行完成反馈：script finish</p>
+<p>若存在语法问题,反馈:
+script error</p>
+</td>
+<td><p>发送一段脚本指令时，由&lt;start&gt;标识符开通，
+以&lt;end&gt;标识符结尾。</p>
+<p>机械臂会运行在&lt;start&gt;和&lt;end&gt;标识符之间的指令,
+整个脚本可以分多次发送完毕。</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>speed(速度百分比)</p></td>
+<td><p>执行成功反馈：set success</p>
+<p>执行失败反馈：set fail</p>
+</td>
+<td><p>可修改程序运行的速度百分比。参数范围在（0,100],</p>
+<p>若修改成功，会返回set success，若不成功，</p>
+<p>会返回set fail</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>stop</p></td>
+<td><p>执行成功反馈：stop success</p>
+<p>执行失败反馈：stop fail</p>
+</td>
+<td><p>机器人会停止当前执行的指令。停止后会发送stop</p>
+<p>success回执。若机器人处于非运行状态，接收到</p>
+<p>stop命令后会发送stop fail回执</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>pause</p></td>
+<td><p>执行成功反馈：pause success</p>
+<p>执行失败反馈：pause fail</p>
+</td>
+<td><p>机器人会暂停当前执行的指令。停止时会发送pause</p>
+<p>success回执。若机器人处于非运行状态，接收到</p>
+<p>pause命令后会发送pause fail回执。</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>resume</p></td>
+<td><p>执行成功反馈：resume success</p>
+<p>执行失败反馈：resume fail</p>
+</td>
+<td><p>机器人在暂停时会继续运行,程序运行时会发送resume</p>
+<p>success回执。若机器人不在暂停状态，接收到resume</p>
+<p>命令后会发送resume fail回执</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>poweron</p></td>
+<td><p>执行成功反馈：poweron success</p>
+<p>执行失败反馈：poweron fail</p>
+</td>
+<td><p>机器人上电，若上电成功，建立通讯链接，返回</p>
+<p>poweron success若失败返回poweron fail,若当</p>
+<blockquote>
+<div><p>前是已上电状态，返回already poweron</p>
+</div></blockquote>
+</td>
+</tr>
+<tr class="row-odd"><td><p>poweroff</p></td>
+<td><p>执行成功反馈：poweroff success</p>
+<p>执行失败反馈：poweroff fail</p>
+</td>
+<td><p>机器人下电，若下电成功，返回poweroff success，</p>
+<p>若失败返回poweroff fail，若当前是下电状态，返回</p>
+<p>already poweroff</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>enable</p></td>
+<td><p>执行成功反馈：enable success</p>
+<p>执行失败反馈：enable fail</p>
+</td>
+<td><p>机器人上使能，若上使能成功，返回enable success</p>
+<p>若失败返回enable fail,若当前是使能状态，</p>
+<p>返回already enable</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>disable</p></td>
+<td><p>执行成功反馈：disable success</p>
+<p>执行失败反馈：disable fail</p>
+</td>
+<td><p>机器人下使能，若下使能成功，返回disable success</p>
+<p>若失败返回disable fail,若当前是已上电且未使能</p>
+<p>状态,返回already disable</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>shutdown</p></td>
+<td><p>执行成功反馈：shutdown success</p>
+<p>执行失败反馈：shutdown fail</p>
+</td>
+<td><p>机器人已处于poweroff状态，机器人系统会自动关闭,</p>
+<p>返回shutdown success回执。若机器人未</p>
+<p>下电，返回shutdown fail回执</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>state</p></td>
+<td><p>反馈各系统状态机，格式(1): (2)</p>
+<p>: (3):(4)注：(1) 机器人状态机，</p>
+<ol class="arabic simple" start="2">
+<li><p>机器人程序运行状态， (3)安</p></li>
+</ol>
+<p>全监控状态，(4)机器人操作模式</p>
+</td>
+<td><p>各状态机以数字形式返回。每个数字所代表的状态。</p>
+<p>请参考2001端口，地址1448-1451</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>isprogfinish</p></td>
+<td><p>反馈程序是否运行结束，结</p>
+<p>束反馈字符1，未结束反馈字符0</p>
+</td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>getlasterror</p></td>
+<td><p>反馈机器人最后一次报错的</p>
+<p>详细错误信息，格式</p>
+<p>error_id:error_messagen</p>
+</td>
+<td><p>错误码返回为16进制</p></td>
+</tr>
+<tr class="row-even"><td><p>getsysteminfo</p></td>
+<td><p>反馈机器人的系列号、型</p>
+<p>号、SN号、软固件版本号</p>
+<p>等信息</p>
+</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id2">
+<h2>2001端口<a class="headerlink" href="#id2" title="此标题的永久链接" x-intersect.margin.0%.0%.-70%.0%="activeSection = '#id2'"><span>#</span></a></h2>
+<p>端口2001会以10Hz的频率向外部发送机器人当前的状态信息，数据总长度1468个字节。</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>数据</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>数量</p></th>
+<th class="head"><p>字节大小</p></th>
+<th class="head"><p>地址</p></th>
+<th class="head"><p>注释</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>关节实际位置</p></td>
+<td><p>float</p></td>
+<td><p>7</p></td>
+<td><p>28</p></td>
+<td><p>0-27</p></td>
+<td><p>6关节各自实际位置，第7位预留。</p>
+<p>单位为rad</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>关节实际速度</p></td>
+<td><p>float</p></td>
+<td><p>7</p></td>
+<td><p>28</p></td>
+<td><p>28-55</p></td>
+<td><p>6关节各自实际速度，第7位预留.</p>
+<p>单位为rad/s</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>关节实际加速度</p></td>
+<td><p>float</p></td>
+<td><p>7</p></td>
+<td><p>28</p></td>
+<td><p>56-83</p></td>
+<td><p>6关节各自实际加速度，第7位预留.</p>
+<p>单位为rad/</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>关节实际力矩</p></td>
+<td><p>float</p></td>
+<td><p>7</p></td>
+<td><p>28</p></td>
+<td><p>84-111</p></td>
+<td><p>6关节各自实际力矩，第7位预留。</p>
+<p>单位为Nm</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>关节期望位置</p></td>
+<td><p>float</p></td>
+<td><p>7</p></td>
+<td><p>28</p></td>
+<td><p>112-139</p></td>
+<td><p>6关节各自设定位置，第7位预留。</p>
+<p>单位为rad</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>关节期望速度</p></td>
+<td><p>float</p></td>
+<td><p>7</p></td>
+<td><p>28</p></td>
+<td><p>140-167</p></td>
+<td><p>6关节各自设定速度，第7位预留。</p>
+<p>单位为rad/s</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>关节期望加速度</p></td>
+<td><p>float</p></td>
+<td><p>7</p></td>
+<td><p>28</p></td>
+<td><p>168-195</p></td>
+<td><p>6关节各自设定加速度，第7位预留。</p>
+<p>单位为rad/</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>关节期望力矩</p></td>
+<td><p>float</p></td>
+<td><p>7</p></td>
+<td><p>28</p></td>
+<td><p>196-223</p></td>
+<td><p>6关节各自设定力矩，第7位预留。单位为Nm</p>
+<p>单位为Nm</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>关节实际温度</p></td>
+<td><p>float</p></td>
+<td><p>7</p></td>
+<td><p>28</p></td>
+<td><p>224-251</p></td>
+<td><p>7关节各自实际温度。数据预留</p></td>
+</tr>
+<tr class="row-odd"><td><p>关节实际电流</p></td>
+<td><p>float</p></td>
+<td><p>7</p></td>
+<td><p>28</p></td>
+<td><p>252-279</p></td>
+<td><p>6关节各自实际电流，第7位预留。</p>
+<p>单位为额定电流千分比。</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>伺服驱动错误id</p></td>
+<td><p>uint</p></td>
+<td><p>7</p></td>
+<td><p>28</p></td>
+<td><p>280-307</p></td>
+<td><p>6关节伺服驱动错误id，第7位预留。</p></td>
+</tr>
+<tr class="row-odd"><td><p>伺服驱动状态字</p></td>
+<td><p>uint</p></td>
+<td><p>7</p></td>
+<td><p>28</p></td>
+<td><p>308-335</p></td>
+<td><p>6关节伺服驱动状态字，第7位预留</p></td>
+</tr>
+<tr class="row-even"><td><p>预留</p></td>
+<td><p>byte</p></td>
+<td><p>32</p></td>
+<td><p>32</p></td>
+<td><p>336-367</p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>TCP实际位置</p></td>
+<td><p>float</p></td>
+<td><p>6</p></td>
+<td><p>24</p></td>
+<td><p>368-391</p></td>
+<td><p>末端笛卡尔空间实际位姿。 TCP</p>
+<p>相对基坐标系的值。数据定义：X ,</p>
+<p>Y, Z,Rx,Ry,Rz, 单位为m ，rad</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>TCP实际速度</p></td>
+<td><p>float</p></td>
+<td><p>6</p></td>
+<td><p>24</p></td>
+<td><p>392-415</p></td>
+<td><p>末端笛卡尔空间实际速度。 TCP</p>
+<p>相对基坐标系的值。数据定义：X ,</p>
+<p>Y, Z,Rx,Ry,Rz, 单位为m ，rad/s</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>TCP实际加速度</p></td>
+<td><p>float</p></td>
+<td><p>6</p></td>
+<td><p>24</p></td>
+<td><p>416-439</p></td>
+<td><p>末端笛卡尔空间实际位姿。 TCP</p>
+<p>相对基坐标系的值。数据定义：X ,</p>
+<p>Y, Z,Rx,Ry,Rz, 单位为m/s2, rad/s2</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>法兰实际外力</p></td>
+<td><p>float</p></td>
+<td><p>6</p></td>
+<td><p>24</p></td>
+<td><p>440-463</p></td>
+<td><p>机器人末端法兰受到的外力,当</p>
+<p>配置末端力矩传感器时,该值</p>
+<p>为传感器数据在机器人末端法兰面下的力描述。</p>
+<p>据定义：X , Y, Z,Rx,Ry,Rz, 单位为N ，Nm</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>TCP期望位置</p></td>
+<td><p>float</p></td>
+<td><p>6</p></td>
+<td><p>24</p></td>
+<td><p>464-487</p></td>
+<td><p>末端笛卡尔空间实际位姿。 TCP</p>
+<p>相对基坐标系的值。数据定义：X ,</p>
+<p>Y, Z,Rx,Ry,Rz, 单位为m ，rad</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>TCP期望速度</p></td>
+<td><p>float</p></td>
+<td><p>6</p></td>
+<td><p>24</p></td>
+<td><p>488-511</p></td>
+<td><p>末端笛卡尔空间实际速度。 TCP</p>
+<p>相对基坐标系的值。数据定义：X ,</p>
+<p>Y, Z,Rx,Ry,Rz, 单位为m/s ，rad/s</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>TCP期望加速度</p></td>
+<td><p>float</p></td>
+<td><p>6</p></td>
+<td><p>24</p></td>
+<td><p>512-535</p></td>
+<td><p>末端笛卡尔空间实际速度。 TCP</p>
+<p>相对基坐标系的值。数据定义：X ,</p>
+<p>Y, Z,Rx,Ry,Rz, 单位为m/s2 ，rad/s2</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>法兰理论外力</p></td>
+<td><p>float</p></td>
+<td><p>6</p></td>
+<td><p>24</p></td>
+<td><p>536-559</p></td>
+<td><p>机器人末端法兰在当前运动状态下,理论</p>
+<p>收到的外力大小。数据定义：X , Y, Z,Rx,Ry,Rz,</p>
+<p>单位为N ，Nm</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>基座实际外力</p></td>
+<td><p>float</p></td>
+<td><p>6</p></td>
+<td><p>24</p></td>
+<td><p>560-583</p></td>
+<td><p>底座实际受力在机器人基座下的力描述。当配置底座力矩</p>
+<p>传感器时，该值为力矩传感器测量值,数据定</p>
+<p>义：X , Y, Z,Rx,Ry,Rz, 单位为N ，Nm</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>基座理论外力</p></td>
+<td><p>float</p></td>
+<td><p>6</p></td>
+<td><p>24</p></td>
+<td><p>584-607</p></td>
+<td><p>在当前运动状态下,底座理论受力在机器人</p>
+<p>基座下的力描述。数据定义：X , Y, Z,Rx,Ry,Rz,</p>
+<p>单位为N ，Nm</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>当前激活的工
+具坐标系</p></td>
+<td><p>float</p></td>
+<td><p>6</p></td>
+<td><p>24</p></td>
+<td><p>608-631</p></td>
+<td><p>数据定义：X , Y, Z,Rx,Ry,Rz, 单位为m ，rad</p></td>
+</tr>
+<tr class="row-even"><td><p>当前激活的工件</p>
+<p>坐标系</p>
+</td>
+<td><p>float</p></td>
+<td><p>6</p></td>
+<td><p>24</p></td>
+<td><p>632-655</p></td>
+<td><p>不包含当前工具坐标系偏移量.数据</p>
+<p>定义：X , Y, Z,Rx,Ry,Rz, 单位为</p>
+<p>m ，rad</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>合线速度</p></td>
+<td><p>float</p></td>
+<td><p>1</p></td>
+<td><p>4</p></td>
+<td><p>656-659</p></td>
+<td><p>末端合线速度，单位为m/s</p></td>
+</tr>
+<tr class="row-even"><td><p>全局速度</p></td>
+<td><p>byte</p></td>
+<td><p>1</p></td>
+<td><p>1</p></td>
+<td><p>660</p></td>
+<td><p>全局速度百分比</p></td>
+</tr>
+<tr class="row-odd"><td><p>Jog速度</p></td>
+<td><p>byte</p></td>
+<td><p>1</p></td>
+<td><p>1</p></td>
+<td><p>661</p></td>
+<td><p>Jog速度百分比</p></td>
+</tr>
+<tr class="row-even"><td><p>预留</p></td>
+<td><p>byte</p></td>
+<td><p>58</p></td>
+<td><p>58</p></td>
+<td><p>662-719</p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>功能数字IO输入</p></td>
+<td><p>byte</p></td>
+<td><p>8</p></td>
+<td><p>8</p></td>
+<td><p>720-727</p></td>
+<td><p>以一个byte表示一个bool量。</p>
+<p>True=1,false=0。对应硬件FDI1-FDI8</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>功能数字IO输出</p></td>
+<td><p>byte</p></td>
+<td><p>8</p></td>
+<td><p>8</p></td>
+<td><p>728-735</p></td>
+<td><p>以一个byte表示一个bool量。</p>
+<p>True=1,false=0。对应硬件FDO1-FDO8</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>数字IO输入</p></td>
+<td><p>byte</p></td>
+<td><p>16</p></td>
+<td><p>16</p></td>
+<td><p>736-751</p></td>
+<td><p>对应DI接口普通DI输入1-16。</p>
+<p>对应硬件DI1-DI16</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>数字IO输出</p></td>
+<td><p>byte</p></td>
+<td><p>16</p></td>
+<td><p>16</p></td>
+<td><p>752-767</p></td>
+<td><p>对应DO接口普通DO输出1-</p>
+<p>16。对应硬件DO1-DO16</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>模拟量输入</p></td>
+<td><p>float</p></td>
+<td><p>8</p></td>
+<td><p>32</p></td>
+<td><p>768-799</p></td>
+<td><p>8个模拟量输入，前4路为电流、后4路为电压。</p>
+<p>对应硬件AI_C1-AI_C4,AI_V1-AI_V4。</p>
+<p>取值范围详见硬件说明书。</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>模拟量输出</p></td>
+<td><p>float</p></td>
+<td><p>8</p></td>
+<td><p>32</p></td>
+<td><p>800-831</p></td>
+<td><p>预留</p></td>
+</tr>
+<tr class="row-odd"><td><p>float寄存器输入</p></td>
+<td><p>float</p></td>
+<td><p>32</p></td>
+<td><p>128</p></td>
+<td><p>832-959</p></td>
+<td><p>可通过modbus、Profinet等外部接口修改</p></td>
+</tr>
+<tr class="row-even"><td><p>float寄存器输出</p></td>
+<td><p>float</p></td>
+<td><p>32</p></td>
+<td><p>128</p></td>
+<td><p>960-1087</p></td>
+<td><p>可通过脚本函数修改</p></td>
+</tr>
+<tr class="row-odd"><td><p>功能bool寄存器输入</p></td>
+<td><p>byte</p></td>
+<td><p>16</p></td>
+<td><p>16</p></td>
+<td><p>1088-1103</p></td>
+<td><p>可通过modbus、Profinet等外部接口修改</p></td>
+</tr>
+<tr class="row-even"><td><p>功能bool寄存器输出</p></td>
+<td><p>byte</p></td>
+<td><p>16</p></td>
+<td><p>16</p></td>
+<td><p>1104-1119</p></td>
+<td><p>可通过脚本函数修改</p></td>
+</tr>
+<tr class="row-odd"><td><p>bool寄存器输入</p></td>
+<td><p>byte</p></td>
+<td><p>64</p></td>
+<td><p>64</p></td>
+<td><p>1120-1183</p></td>
+<td><p>可通过modbus、Profinet等外部接口修改</p></td>
+</tr>
+<tr class="row-even"><td><p>bool寄存器输出</p></td>
+<td><p>byte</p></td>
+<td><p>64</p></td>
+<td><p>64</p></td>
+<td><p>1184-1247</p></td>
+<td><p>可通过脚本函数修改</p></td>
+</tr>
+<tr class="row-odd"><td><p>word寄存器输入</p></td>
+<td><p>char</p></td>
+<td><p>32</p></td>
+<td><p>64</p></td>
+<td><p>1248-1311</p></td>
+<td><p>可通过modbus、Profinet等外部接口修改</p></td>
+</tr>
+<tr class="row-even"><td><p>word寄存器输出</p></td>
+<td><p>char</p></td>
+<td><p>32</p></td>
+<td><p>64</p></td>
+<td><p>1312-1375</p></td>
+<td><p>可通过脚本函数修改</p></td>
+</tr>
+<tr class="row-odd"><td><p>预留</p></td>
+<td><p>byte</p></td>
+<td><p>32</p></td>
+<td><p>31</p></td>
+<td><p>1376-1406</p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>仿真/真机</p></td>
+<td><p>byte</p></td>
+<td><p>1</p></td>
+<td><p>1</p></td>
+<td><p>1407</p></td>
+<td><p>机器人仿真/真机模式</p></td>
+</tr>
+<tr class="row-odd"><td><p>工具IO输入</p></td>
+<td><p>byte</p></td>
+<td><p>8</p></td>
+<td><p>8</p></td>
+<td><p>1408-1415</p></td>
+<td><p>工具数字输入（1-2末端输入，3-8预留）。</p>
+<p>对应硬件工具IO数字输入1-2</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>工具IO输出</p></td>
+<td><p>byte</p></td>
+<td><p>8</p></td>
+<td><p>8</p></td>
+<td><p>1416-1423</p></td>
+<td><p>工具数字输出（1-2末端输出，3-8预留）。</p>
+<p>对应硬件工具IO数字输出1-2</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>工具模拟量输入</p></td>
+<td><p>float</p></td>
+<td><p>2</p></td>
+<td><p>16</p></td>
+<td><p>1424-1431</p></td>
+<td><p>工具末端电压模拟量输入。取值范围0V-10V</p></td>
+</tr>
+<tr class="row-even"><td><p>工具模拟量输出</p></td>
+<td><p>float</p></td>
+<td><p>2</p></td>
+<td><p>16</p></td>
+<td><p>1432-1439</p></td>
+<td><p>预留</p></td>
+</tr>
+<tr class="row-odd"><td><p>工具按钮状态</p></td>
+<td><p>byte</p></td>
+<td><p>2</p></td>
+<td><p>2</p></td>
+<td><p>1440-1441</p></td>
+<td><p>以一个byte表示一个bool量。True=1,false=0。地址</p>
+<p>1440表示S键的状态，地址1441表示T键的状态。</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>预留</p></td>
+<td><p>byte</p></td>
+<td><p>6</p></td>
+<td><p>6</p></td>
+<td><p>1442-1447</p></td>
+<td></td>
+</tr>
+<tr class="row-odd"><td><p>机器人操作模式</p></td>
+<td><p>char</p></td>
+<td><p>1</p></td>
+<td><p>1</p></td>
+<td><p>1448</p></td>
+<td><p>0：kManual,1：kAuto,2：kRemote,</p></td>
+</tr>
+<tr class="row-even"><td><p>机器人状态</p></td>
+<td><p>char</p></td>
+<td><p>1</p></td>
+<td><p>1</p></td>
+<td><p>1449</p></td>
+<td><p>0：SR_Start,1：SR_Initialize,2：SR_Logout,</p>
+<p>3：SR_Login,4：SR_PowerOff,5：SR_Disable/SR_</p>
+<p>PowerOn（上电未使能状态）6：SR_Enable</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>机器人程序运行状态</p></td>
+<td><p>char</p></td>
+<td><p>1</p></td>
+<td><p>1</p></td>
+<td><p>1450</p></td>
+<td><p>0：SP_Stopped,1：SP_Stopping,2：SP_Running,</p>
+<p>3：SP_Paused,4：SP_Pausing5：SP_TaskRunning</p>
+</td>
+</tr>
+<tr class="row-even"><td><p>安全监控状态</p></td>
+<td><p>char</p></td>
+<td><p>1</p></td>
+<td><p>1</p></td>
+<td><p>1451</p></td>
+<td><p>0：SS_INIT2：SS_WAIT3：SS_CONFIG</p>
+<p>4：SS_POWER_OFF5：SS_RUN6：SS_RECOVERY</p>
+<p>7：SS_STOP28：SS_STOP19：SS_STOP0</p>
+<p>10：SS_MODEL12：SS_REDUCE13：SS_BOOT</p>
+<p>14：SS_FAIL15：SS_UPDATE</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>碰撞检测触发信号</p></td>
+<td><p>char</p></td>
+<td><p>1</p></td>
+<td><p>1</p></td>
+<td><p>1452</p></td>
+<td><p>为1表示触发碰撞检测</p></td>
+</tr>
+<tr class="row-even"><td><p>碰撞轴</p></td>
+<td><p>char</p></td>
+<td><p>1</p></td>
+<td><p>1</p></td>
+<td><p>1453</p></td>
+<td><p>返回值为数字。1~6表示发生碰撞的关节，</p>
+<p>11~16表示基于底座力传感器碰撞发生的方向。</p>
+<p>顺序为 X , Y, Z,Rx,Ry,Rz .20表示基于末</p>
+<p>端力传感器碰撞发生</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>预留</p></td>
+<td><p>byte</p></td>
+<td><p>2</p></td>
+<td><p>2</p></td>
+<td><p>1454-1455</p></td>
+<td></td>
+</tr>
+<tr class="row-even"><td><p>机器人错误代码</p></td>
+<td><p>uint</p></td>
+<td><p>1</p></td>
+<td><p>4</p></td>
+<td><p>1456-1459</p></td>
+<td><p>机器人最新报错的错误代码，当同时出现多个错误时，</p>
+<p>可能返回其中的任何一个错误代码。</p>
+</td>
+</tr>
+<tr class="row-odd"><td><p>预留</p></td>
+<td><p>byte</p></td>
+<td><p>8</p></td>
+<td><p>8</p></td>
+<td><p>1460-1467</p></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+</div><div class="flex justify-between items-center pt-6 mt-12 border-t border-border gap-4">
+<div class="mr-auto">
+<a class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input hover:bg-accent hover:text-accent-foreground py-2 px-4" href="../index.html">
+<svg class="mr-2 h-4 w-4" fill="none" height="24" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+<polyline points="15 18 9 12 15 6"></polyline>
+</svg>
+        接口使用说明
+      </a>
+</div>
+<div class="ml-auto">
+<a class="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors border border-input hover:bg-accent hover:text-accent-foreground py-2 px-4" href="../02Modbus%20TCP%20Server/index.html">
+        Modbus TCP Server
+        <svg class="ml-2 h-4 w-4" fill="none" height="24" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewbox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+<polyline points="9 18 15 12 9 6"></polyline>
+</svg>
+</a>
+</div>
+</div></div><aside class="hidden text-sm xl:block" id="right-sidebar">
+<div class="sticky top-16 -mt-10 max-h-[calc(var(100vh)-5rem)] overflow-y-auto pt-6 space-y-2"><p class="font-medium">本页内容</p>
+<ul>
+<li><a :data-current="activeSection === '#id1'" class="reference internal" href="#id1">2000端口</a></li>
+<li><a :data-current="activeSection === '#id2'" class="reference internal" href="#id2">2001端口</a></li>
+</ul>
+</div>
+</aside>
+</main>
+</div>
+</div><footer class="py-6 border-t border-border md:py-0" style="height: 88px; background: #2f353a;display: flex;align-items: center;justify-content: center; color: #fff;">
+  版权所有©中科新松有限公司2024 
+</footer>
+</div>
+<script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=63e92c15"></script>
+<script src="../_static/doctools.js?v=888ff710"></script>
+<script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+<script defer="defer" src="../_static/theme.js?v=e8bd915e"></script>
+<script src="../_static/design-tabs.js?v=36754332"></script>
+<script src="../_static/custom.js?v=5af180b7"></script>
+</body>
+</html>
