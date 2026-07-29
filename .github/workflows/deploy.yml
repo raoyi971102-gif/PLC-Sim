@@ -1,0 +1,99 @@
+name: Deploy OpcUaSim
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'OpcUaSim/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+env:
+  REMOTE_DIR: /www/wwwroot/OpcUaSim
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # 仓库另外那 99MB 是厂商 PDF/zip，部署用不到，稀疏检出只拉 OpcUaSim
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: OpcUaSim
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'          # 与服务器上的 3.10.12 对齐
+      - name: 安装依赖
+        working-directory: OpcUaSim
+        run: pip install -r requirements.txt
+      - name: 自检
+        working-directory: OpcUaSim
+        run: python _test_attach.py
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: OpcUaSim
+
+      - name: 配置 SSH
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: 同步代码
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+        run: |
+          rsync -az --delete \
+            --exclude='.venv/' \
+            --exclude='__pycache__/' \
+            --exclude='*.pyc' \
+            --exclude='.env' \
+            --exclude='data/uploads/' \
+            --exclude='extracted/' \
+            -e "ssh -p $SSH_PORT -i ~/.ssh/id_deploy" \
+            OpcUaSim/ "$SSH_USER@$SSH_HOST:$REMOTE_DIR/"
+
+      - name: 装依赖、重启 GUI、健康检查
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+        run: |
+          ssh -p "$SSH_PORT" -i ~/.ssh/id_deploy "$SSH_USER@$SSH_HOST" \
+              "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$REMOTE_DIR"
+          .venv/bin/pip install -q -r requirements.txt
+          chown -R www:www "$REMOTE_DIR"
+
+          # GUI 托管模式下 Server/Agent 是 GUI 的子进程。GUI 被杀时它们会变成孤儿
+          # 继续占着 4855，导致下次在网页上点启动必然失败，所以这里一并清掉。
+          pkill -f "$REMOTE_DIR/server\.py"          || true
+          pkill -f "$REMOTE_DIR/handshake_agent\.py" || true
+          pkill -f "$REMOTE_DIR/.venv/bin/python -m gui.backend" || true
+          # 不显式拉起 GUI —— Supervisor 的 autorestart 负责这件事
+
+          for _ in $(seq 30); do
+            sleep 1
+            if curl -fsS http://127.0.0.1:18765/api/health >/dev/null 2>&1; then
+              echo "GUI 已恢复"
+              exit 0
+            fi
+          done
+          echo "GUI 未在 30 秒内恢复，请查看 Supervisor 日志" >&2
+          exit 1
+          REMOTE
+
+      - name: 提示
+        run: echo "部署完成。GUI 托管模式下 Server 和 Agent 需要到网页上重新启动。"

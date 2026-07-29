@@ -84,8 +84,12 @@ function renderState(s) {
   $("dotServer").className = "status-dot " + (s.server.running ? "on" : (s.server.stopping ? "busy" : ""));
   $("dotAgent").className = "status-dot " + (s.agent.running ? "on" : (s.agent.stopping ? "busy" : ""));
   $("statusMcpText").textContent = s.mcp_connected ? "已连接" : "未连接";
-  $("statusServerText").textContent = s.server.stopping ? "停止中" : (s.server.running ? "运行中" : "已停止");
-  $("statusAgentText").textContent = s.agent.stopping ? "停止中" : (s.agent.running ? "运行中" : "已停止");
+  const runText = (p) =>
+    p.stopping ? "停止中"
+      : p.running ? (p.attached ? "运行中（外部托管）" : "运行中")
+        : "已停止";
+  $("statusServerText").textContent = runText(s.server);
+  $("statusAgentText").textContent = runText(s.agent);
 
   const stateMessage = s.last_error || (s.busy ? `正在${s.busy}` : "");
   $("topBusy").textContent = stateMessage;
@@ -98,9 +102,9 @@ function renderState(s) {
 
   setBusyDisabled(!!s.busy);
   $("btnServerStart").disabled = !!s.busy || s.server.running || s.server.stopping;
-  $("btnServerStop").disabled = !!s.busy || s.server.stopping || !s.server.running;
+  $("btnServerStop").disabled = !!s.busy || s.server.stopping || !s.server.running || s.server.attached;
   $("btnAgentStart").disabled = !!s.busy || s.agent.running || s.agent.stopping;
-  $("btnAgentStop").disabled = !!s.busy || s.agent.stopping || !s.agent.running;
+  $("btnAgentStop").disabled = !!s.busy || s.agent.stopping || !s.agent.running || s.agent.attached;
   $("btnClose").disabled = !!s.busy || !s.project;
   $("btnRefreshVars").disabled = variablePage.loading || !s.server.running;
   $("btnVarsPrev").disabled = variablePage.loading || !s.server.running || variablePage.offset <= 0;
@@ -379,6 +383,34 @@ $("btnSetPou").onclick = async () => {
 };
 
 // ---------------- Tab: Sim ----------------
+// 远程部署时浏览器所在机器和服务器不是同一台, 填不出服务器路径 —— 上传后回填
+$("simCsvFile").onchange = async (e) => {
+  const input = e.target;
+  const file = input.files?.[0];
+  if (!file) return;
+  input.disabled = true;
+  try {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result));
+      fr.onerror = () => reject(new Error("读取本地文件失败"));
+      fr.readAsDataURL(file);      // 保留原始字节, 让后端去嗅探编码
+    });
+    const r = await post("/api/csv/upload", {
+      filename: file.name,
+      content_b64: dataUrl.slice(dataUrl.indexOf(",") + 1),
+    }, 60000);
+    $("simCsv").value = r.path;
+    $("agentCsv").value = r.path;
+    alert(`上传成功，识别到 ${r.count} 个变量节点：\n${r.path}`);
+  } catch (err) {
+    alert("上传失败: " + err.message);
+  } finally {
+    input.disabled = false;
+    input.value = "";
+  }
+};
+
 $("btnServerStart").onclick = async () => {
   try {
     const r = await post("/api/server/start", {

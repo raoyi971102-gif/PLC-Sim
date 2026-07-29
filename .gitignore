@@ -16,6 +16,7 @@ venv/
 *.local.json
 *.log
 OpcUaSim/extracted/
+OpcUaSim/data/uploads/
 
 # IDE / OS
 .idea/

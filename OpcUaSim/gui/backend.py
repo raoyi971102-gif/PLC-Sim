@@ -17,6 +17,7 @@ gui.backend —— OpcUaSim 一体化 Web 控制面板
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -132,6 +133,8 @@ class AppState:
     busy: Optional[str] = None
     server_proc: Optional[subprocess.Popen] = None
     agent_proc: Optional[subprocess.Popen] = None
+    # Server/Agent 由外部进程管理器（Supervisor、systemd）托管，不由本进程 spawn
+    attached: bool = False
     server_client_url: Optional[str] = None
     server_csv_paths: List[str] = field(default_factory=list)
     server_node_defs: List[NodeDef] = field(default_factory=list)
@@ -158,16 +161,21 @@ class AppState:
             "busy": self.busy,
             "server": {
                 "pid": _alive(self.server_proc),
-                "running": _alive(self.server_proc) is not None,
+                # endpoint 就绪前不报 running：否则前端会在 _wait_for_opc_server
+                # 的窗口里抢跑去拉变量，吃一个 409 后就不会再自动重试
+                "running": self.attached or (_alive(self.server_proc) is not None
+                                             and bool(self.server_client_url)),
                 "stopping": "server_proc" in self.stopping,
+                "attached": self.attached,
                 "endpoint": self.server_client_url,
                 "variable_count": len(self.server_node_defs),
                 "csv": list(self.server_csv_paths),
             },
             "agent": {
                 "pid": _alive(self.agent_proc),
-                "running": _alive(self.agent_proc) is not None,
+                "running": self.attached or _alive(self.agent_proc) is not None,
                 "stopping": "agent_proc" in self.stopping,
+                "attached": self.attached,
             },
             "last_extract_csv": self.last_extract_csv,
             "last_extract_count": self.last_extract_count,
@@ -213,9 +221,37 @@ def _pipe_to_logger(proc: subprocess.Popen, logger_name: str) -> None:
 from contextlib import asynccontextmanager
 
 
+def _attach_external_server() -> None:
+    """挂接由 Supervisor/systemd 托管的 Server 与 Agent，让在线变量面板可用。
+
+    只记录 endpoint 和 CSV 定义，不做健康检查 —— 外部 Server 掉线时读写会以
+    502 暴露出来，比在这里维护一份可能过期的存活状态更诚实。
+    """
+    url = os.environ.get("OPCUASIM_ATTACH_URL")
+    if not url:
+        return
+    csv_path = Path(os.environ.get("OPCUASIM_ATTACH_CSV")
+                    or os.environ.get("OPCUASIM_CSV")
+                    or default_csv_path())
+    try:
+        node_defs = load_csvs([csv_path])
+    except Exception as exc:  # noqa: BLE001
+        log.error("挂接外部 Server 失败，CSV 无法解析 (%s): %s", csv_path, exc)
+        return
+    if not node_defs:
+        log.error("挂接外部 Server 失败，CSV 中没有 VARIABLE 节点: %s", csv_path)
+        return
+    _STATE.attached = True
+    _STATE.server_client_url = url
+    _STATE.server_csv_paths = [str(csv_path.resolve())]
+    _STATE.server_node_defs = node_defs
+    log.info("已挂接外部 Server: %s (%d 个变量, CSV=%s)", url, len(node_defs), csv_path)
+
+
 @asynccontextmanager
 async def _lifespan(app):
     _install_root_logger()
+    _attach_external_server()
     _STATE.loop = asyncio.get_running_loop()
     _STATIC_DIR_LOCAL = Path(__file__).resolve().parent / "static"
     log.info("OpcUaSim GUI started, static=%s", _STATIC_DIR_LOCAL)
@@ -852,6 +888,55 @@ async def _stop_subprocess(field_name: str) -> Dict[str, Any]:
             _STATE.stopping.discard(field_name)
 
 
+class CsvUploadReq(BaseModel):
+    filename: str
+    content_b64: str
+
+
+# ponytail: 走 JSON + base64 而不是 multipart，省掉 python-multipart 依赖。
+# 变量表是几百 KB 量级的文本，撑得住；真要传几十 MB 时再换 UploadFile。
+_CSV_UPLOAD_MAX = 20 * 1024 * 1024
+
+
+@app.post("/api/csv/upload")
+async def api_csv_upload(req: CsvUploadReq) -> Dict[str, Any]:
+    """上传变量表并落盘，返回服务器端路径供启动流程使用。
+
+    远程部署时用户手上只有本地文件，填不出服务器路径。原样保存字节而不是
+    先解码成文本，是为了让 load_csvs 照旧去嗅探编码 —— 中文 CSV 常见 GBK。
+    """
+    # Windows 传来的 filename 可能是整条 C:\... 路径，POSIX 不把反斜杠当分隔符
+    name = Path(req.filename.replace("\\", "/")).name
+    if not name.lower().endswith(".csv"):
+        raise HTTPException(400, "只接受 .csv 文件")
+    if name.startswith("."):
+        raise HTTPException(400, "文件名不合法")
+    try:
+        raw = base64.b64decode(req.content_b64, validate=True)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"内容不是合法的 base64: {exc}") from exc
+    if not raw:
+        raise HTTPException(400, "文件是空的")
+    if len(raw) > _CSV_UPLOAD_MAX:
+        raise HTTPException(400, f"CSV 超过 {_CSV_UPLOAD_MAX // 1024 // 1024}MB")
+
+    dest_dir = _ROOT / "data" / "uploads"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / name
+    dest.write_bytes(raw)
+    try:
+        node_defs = await asyncio.to_thread(load_csvs, [dest])
+    except Exception as exc:  # noqa: BLE001
+        dest.unlink(missing_ok=True)
+        raise HTTPException(400, f"CSV 解析失败: {exc}") from exc
+    if not node_defs:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(400, "CSV 中没有可用的 VARIABLE 节点")
+
+    log.info("已上传变量表 %s（%d 个节点）", dest, len(node_defs))
+    return {"ok": True, "path": str(dest), "count": len(node_defs)}
+
+
 class ServerStartReq(BaseModel):
     csv: Optional[str] = None     # 不给则用上次提取结果或内置演示表
     host: str = "0.0.0.0"
@@ -863,6 +948,9 @@ class ServerStartReq(BaseModel):
 
 @app.post("/api/server/start")
 async def api_server_start(req: ServerStartReq) -> Dict[str, Any]:
+    if _STATE.attached:
+        raise HTTPException(400, "已挂接外部 Server，由进程管理器托管；"
+                                 "如需由 GUI 启动请去掉 --attach-url")
     if _STATE.server_proc is not None and _STATE.server_proc.poll() is None:
         raise HTTPException(400, "Server 已在运行；请先停止")
     _STATE.server_proc = None
@@ -909,12 +997,16 @@ async def api_server_start(req: ServerStartReq) -> Dict[str, Any]:
 
 @app.post("/api/server/stop")
 async def api_server_stop() -> Dict[str, Any]:
+    if _STATE.attached:
+        raise HTTPException(400, "外部 Server 由进程管理器托管，请在 Supervisor 侧停止")
     return await _stop_subprocess("server_proc")
 
 
 def _require_running_server() -> None:
+    if not _STATE.server_client_url:
+        raise HTTPException(409, "OPC UA Server 未运行")
     proc = _STATE.server_proc
-    if proc is None or proc.poll() is not None or not _STATE.server_client_url:
+    if not _STATE.attached and (proc is None or proc.poll() is not None):
         raise HTTPException(409, "OPC UA Server 未运行")
 
 
@@ -1073,6 +1165,8 @@ class AgentStartReq(BaseModel):
 
 @app.post("/api/agent/start")
 async def api_agent_start(req: AgentStartReq) -> Dict[str, Any]:
+    if _STATE.attached:
+        raise HTTPException(400, "已挂接外部 Agent，由进程管理器托管")
     if _STATE.agent_proc is not None and _STATE.agent_proc.poll() is None:
         raise HTTPException(400, "Handshake Agent 已在运行")
     py = _find_python_exe()
@@ -1097,6 +1191,8 @@ async def api_agent_start(req: AgentStartReq) -> Dict[str, Any]:
 
 @app.post("/api/agent/stop")
 async def api_agent_stop() -> Dict[str, Any]:
+    if _STATE.attached:
+        raise HTTPException(400, "外部 Agent 由进程管理器托管，请在 Supervisor 侧停止")
     return await _stop_subprocess("agent_proc")
 
 
@@ -1175,7 +1271,18 @@ def main() -> int:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=18765)
     ap.add_argument("--no-open", action="store_true", help="启动后不自动打开浏览器")
+    ap.add_argument("--attach-url", default=None,
+                    help="挂接已由 Supervisor/systemd 托管的 Server，"
+                         "例如 opc.tcp://127.0.0.1:4855/xuse_sim/")
+    ap.add_argument("--attach-csv", default=None,
+                    help="挂接时使用的变量表，须与外部 Server 加载的是同一份")
     args = ap.parse_args()
+
+    # 转成环境变量, 让 `uvicorn gui.backend:app` 这类直接拉 app 的入口同样生效
+    if args.attach_url:
+        os.environ["OPCUASIM_ATTACH_URL"] = args.attach_url
+    if args.attach_csv:
+        os.environ["OPCUASIM_ATTACH_CSV"] = args.attach_csv
 
     if not args.no_open:
         import webbrowser
