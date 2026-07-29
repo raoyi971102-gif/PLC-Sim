@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import os
 import queue
 import subprocess
@@ -33,6 +34,7 @@ from typing import Any, Dict, List, Optional, Set
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+from opcua import Client, ua
 from pydantic import BaseModel
 
 # 允许直接 `python -m gui.backend` 时找到根包
@@ -40,7 +42,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from common import default_csv_path
+from common import NodeDef, VTYPE_MAP, default_csv_path, load_csvs
 from ino_mcp.client import McpClient, McpError
 from ino_mcp.config import resolve_mcp_config
 from ino_mcp.toolkit import InoToolkit, DownloadStrategy
@@ -130,10 +132,15 @@ class AppState:
     busy: Optional[str] = None
     server_proc: Optional[subprocess.Popen] = None
     agent_proc: Optional[subprocess.Popen] = None
+    server_client_url: Optional[str] = None
+    server_csv_paths: List[str] = field(default_factory=list)
+    server_node_defs: List[NodeDef] = field(default_factory=list)
     last_extract_csv: Optional[str] = None
     last_extract_count: int = 0
+    stopping: Set[str] = field(default_factory=set)
     log_queues: Set[asyncio.Queue] = field(default_factory=set)
     mcp_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    server_io_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     loop: Optional[asyncio.AbstractEventLoop] = None
     last_error: Optional[str] = None
     # dump_all_declarations 的缓存 (供 editables + extract 复用, 避免 20s 探针跑两次)
@@ -152,10 +159,15 @@ class AppState:
             "server": {
                 "pid": _alive(self.server_proc),
                 "running": _alive(self.server_proc) is not None,
+                "stopping": "server_proc" in self.stopping,
+                "endpoint": self.server_client_url,
+                "variable_count": len(self.server_node_defs),
+                "csv": list(self.server_csv_paths),
             },
             "agent": {
                 "pid": _alive(self.agent_proc),
                 "running": _alive(self.agent_proc) is not None,
+                "stopping": "agent_proc" in self.stopping,
             },
             "last_extract_csv": self.last_extract_csv,
             "last_extract_count": self.last_extract_count,
@@ -211,8 +223,8 @@ async def _lifespan(app):
         yield
     finally:
         log.info("shutting down…")
-        _stop_subprocess("server_proc")
-        _stop_subprocess("agent_proc")
+        await _stop_subprocess("server_proc")
+        await _stop_subprocess("agent_proc")
         if _STATE.mcp is not None:
             try:
                 _STATE.mcp.close()
@@ -741,22 +753,103 @@ def _python_subprocess_env() -> Dict[str, str]:
     return env
 
 
-def _stop_subprocess(field_name: str) -> Dict[str, Any]:
-    proc: Optional[subprocess.Popen] = getattr(_STATE, field_name)
-    if proc is None or proc.poll() is not None:
-        setattr(_STATE, field_name, None)
-        return {"ok": True, "message": "已经停止或未运行"}
-    log.info("终止子进程 %s pid=%d", field_name, proc.pid)
+def _clear_server_metadata() -> None:
+    _STATE.server_client_url = None
+    _STATE.server_csv_paths = []
+    _STATE.server_node_defs = []
+
+
+def _server_client_host(host: str) -> str:
+    normalized = host.strip()
+    if normalized in {"", "0.0.0.0", "::", "[::]"}:
+        return "127.0.0.1"
+    return normalized
+
+
+def _wait_for_opc_server(
+    url: str,
+    proc: subprocess.Popen,
+    timeout: float = 5.0,
+) -> None:
+    """等 endpoint 真正可连接，避免子进程尚未 bind 就向前端报告成功。"""
+    deadline = time.monotonic() + timeout
+    last_error: Optional[Exception] = None
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(f"Server 进程已退出，退出码: {proc.returncode}")
+        client = Client(url, timeout=0.8)
+        try:
+            client.connect()
+            client.disconnect()
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            with contextlib.suppress(Exception):
+                client.disconnect()
+            time.sleep(0.1)
+    raise TimeoutError(f"等待 OPC UA endpoint 超时: {last_error}")
+
+
+_PROCESS_STOP_LOCKS = {
+    "server_proc": asyncio.Lock(),
+    "agent_proc": asyncio.Lock(),
+}
+
+
+def _terminate_and_wait(proc: subprocess.Popen) -> Dict[str, Any]:
+    """在线程中执行阻塞式进程回收，保证最终 wait，避免 Windows 残留句柄。"""
+    forced = False
     try:
         proc.terminate()
         try:
-            proc.wait(timeout=5)
+            exit_code = proc.wait(timeout=2)
         except subprocess.TimeoutExpired:
+            forced = True
             proc.kill()
+            exit_code = proc.wait(timeout=2)
+        return {
+            "ok": True,
+            "message": "已停止",
+            "pid": proc.pid,
+            "exit_code": exit_code,
+            "forced": forced,
+        }
     except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "message": str(exc)}
-    setattr(_STATE, field_name, None)
-    return {"ok": True, "message": "已停止"}
+        if proc.poll() is not None:
+            return {
+                "ok": True,
+                "message": "已停止",
+                "pid": proc.pid,
+                "exit_code": proc.returncode,
+                "forced": forced,
+            }
+        return {"ok": False, "message": str(exc), "pid": proc.pid, "forced": forced}
+
+
+async def _stop_subprocess(field_name: str) -> Dict[str, Any]:
+    """异步停止托管子进程，不阻塞 FastAPI 的状态接口和 SSE。"""
+    lock = _PROCESS_STOP_LOCKS[field_name]
+    async with lock:
+        proc: Optional[subprocess.Popen] = getattr(_STATE, field_name)
+        if proc is None or proc.poll() is not None:
+            setattr(_STATE, field_name, None)
+            if field_name == "server_proc":
+                _clear_server_metadata()
+            return {"ok": True, "message": "已经停止或未运行"}
+
+        log.info("终止子进程 %s pid=%d", field_name, proc.pid)
+        _STATE.stopping.add(field_name)
+        try:
+            result = await asyncio.to_thread(_terminate_and_wait, proc)
+            if result["ok"] and getattr(_STATE, field_name) is proc:
+                setattr(_STATE, field_name, None)
+                if field_name == "server_proc":
+                    _clear_server_metadata()
+            if result.get("forced"):
+                log.warning("子进程 %s pid=%d 未及时退出，已强制终止", field_name, proc.pid)
+            return result
+        finally:
+            _STATE.stopping.discard(field_name)
 
 
 class ServerStartReq(BaseModel):
@@ -772,15 +865,24 @@ class ServerStartReq(BaseModel):
 async def api_server_start(req: ServerStartReq) -> Dict[str, Any]:
     if _STATE.server_proc is not None and _STATE.server_proc.poll() is None:
         raise HTTPException(400, "Server 已在运行；请先停止")
+    _STATE.server_proc = None
+    _clear_server_metadata()
     csv_path = req.csv or _STATE.last_extract_csv or str(default_csv_path())
     if not Path(csv_path).exists():
         raise HTTPException(400, f"CSV 不存在: {csv_path}")
+    resolved_csv = str(Path(csv_path).resolve())
+    try:
+        node_defs = await asyncio.to_thread(load_csvs, [Path(resolved_csv)])
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"CSV 解析失败: {exc}") from exc
+    if not node_defs:
+        raise HTTPException(400, "CSV 中没有可用的 VARIABLE 节点")
 
     py = _find_python_exe()
     server_py = _ROOT / "server.py"
     cmd = [py, str(server_py),
            "--host", req.host, "--port", str(req.port),
-           "--csv", str(Path(csv_path).resolve()),
+           "--csv", resolved_csv,
            "--ns-index", str(req.ns_index), "--ns-uri", req.ns_uri]
     if not req.occupancy_true:
         cmd.append("--no-occupancy-true")
@@ -790,13 +892,176 @@ async def api_server_start(req: ServerStartReq) -> Dict[str, Any]:
                             cwd=str(_ROOT), bufsize=0, env=_python_subprocess_env())
     _pipe_to_logger(proc, "server")
     _STATE.server_proc = proc
-    await asyncio.sleep(0.3)  # 给一点时间抓早期错误
+    client_host = _server_client_host(req.host)
+    client_url = f"opc.tcp://{client_host}:{req.port}/xuse_sim/"
+    try:
+        await asyncio.to_thread(_wait_for_opc_server, client_url, proc)
+    except Exception as exc:  # noqa: BLE001
+        await asyncio.to_thread(_terminate_and_wait, proc)
+        _STATE.server_proc = None
+        _clear_server_metadata()
+        raise HTTPException(500, f"Server 启动失败: {exc}") from exc
+    _STATE.server_client_url = client_url
+    _STATE.server_csv_paths = [resolved_csv]
+    _STATE.server_node_defs = node_defs
     return {"ok": True, "pid": proc.pid}
 
 
 @app.post("/api/server/stop")
 async def api_server_stop() -> Dict[str, Any]:
-    return _stop_subprocess("server_proc")
+    return await _stop_subprocess("server_proc")
+
+
+def _require_running_server() -> None:
+    proc = _STATE.server_proc
+    if proc is None or proc.poll() is not None or not _STATE.server_client_url:
+        raise HTTPException(409, "OPC UA Server 未运行")
+
+
+def _read_node_values(url: str, node_defs: List[NodeDef]) -> List[Any]:
+    client = Client(url, timeout=4)
+    try:
+        client.connect()
+        nodes = [client.get_node(item.node_id) for item in node_defs]
+        return list(client.get_values(nodes))
+    finally:
+        with contextlib.suppress(Exception):
+            client.disconnect()
+
+
+def _coerce_node_value(data_type: str, raw: Any) -> Any:
+    if data_type == "BOOLEAN":
+        if isinstance(raw, bool):
+            return raw
+        normalized = str(raw).strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+        raise ValueError("BOOLEAN 仅接受 true/false 或 1/0")
+    if data_type == "INT16":
+        value = int(raw)
+        if not -32768 <= value <= 32767:
+            raise ValueError("INT16 超出范围 -32768..32767")
+        return value
+    if data_type == "INT32":
+        value = int(raw)
+        if not -2147483648 <= value <= 2147483647:
+            raise ValueError("INT32 超出范围")
+        return value
+    if data_type == "FLOAT":
+        value = float(raw)
+        if not math.isfinite(value):
+            raise ValueError("FLOAT 必须是有限数值")
+        return value
+    if data_type == "STRING":
+        return str(raw)
+    raise ValueError(f"不支持的数据类型: {data_type}")
+
+
+def _write_node_value(url: str, node_def: NodeDef, value: Any) -> Any:
+    client = Client(url, timeout=4)
+    try:
+        client.connect()
+        node = client.get_node(node_def.node_id)
+        node.set_value(ua.Variant(value, VTYPE_MAP[node_def.data_type]))
+        return node.get_value()
+    finally:
+        with contextlib.suppress(Exception):
+            client.disconnect()
+
+
+@app.get("/api/server/variables")
+async def api_server_variables(
+    query: str = Query("", max_length=200),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+) -> Dict[str, Any]:
+    """读取当前托管 OPC UA Server 的在线变量值。"""
+    _require_running_server()
+    needle = query.strip().casefold()
+    node_defs = _STATE.server_node_defs
+    if needle:
+        node_defs = [
+            item for item in node_defs
+            if needle in item.name_cn.casefold()
+            or needle in item.name_en.casefold()
+            or needle in item.node_id.casefold()
+            or needle in item.data_type.casefold()
+        ]
+    total = len(node_defs)
+    page = node_defs[offset:offset + limit]
+    if not page:
+        return {"ok": True, "total": total, "offset": offset, "limit": limit, "items": []}
+
+    assert _STATE.server_client_url is not None
+    try:
+        async with _STATE.server_io_lock:
+            values = await asyncio.to_thread(
+                _read_node_values, _STATE.server_client_url, page
+            )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"读取 OPC UA 变量失败: {exc}") from exc
+
+    items = [
+        {
+            "name": node_def.name_cn,
+            "english_name": node_def.name_en,
+            "data_type": node_def.data_type,
+            "node_id": node_def.node_id,
+            "value": value,
+        }
+        for node_def, value in zip(page, values)
+    ]
+    return {
+        "ok": True,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "items": items,
+    }
+
+
+class ServerVariableWriteReq(BaseModel):
+    node_id: str
+    value: Any
+
+
+@app.post("/api/server/variable")
+async def api_server_variable_write(req: ServerVariableWriteReq) -> Dict[str, Any]:
+    """按 CSV 声明的数据类型写入一个在线变量并回读确认。"""
+    _require_running_server()
+    node_def = next(
+        (item for item in _STATE.server_node_defs if item.node_id == req.node_id),
+        None,
+    )
+    if node_def is None:
+        raise HTTPException(404, "变量不在当前 Server 的 CSV 定义中")
+    try:
+        typed_value = _coerce_node_value(node_def.data_type, req.value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    assert _STATE.server_client_url is not None
+    try:
+        async with _STATE.server_io_lock:
+            confirmed = await asyncio.to_thread(
+                _write_node_value,
+                _STATE.server_client_url,
+                node_def,
+                typed_value,
+            )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"写入 OPC UA 变量失败: {exc}") from exc
+
+    log.info("在线写变量 %s (%s) = %r", node_def.name_cn, node_def.node_id, confirmed)
+    return {
+        "ok": True,
+        "node_id": node_def.node_id,
+        "name": node_def.name_cn,
+        "data_type": node_def.data_type,
+        "value": confirmed,
+    }
 
 
 class AgentStartReq(BaseModel):
@@ -832,7 +1097,7 @@ async def api_agent_start(req: AgentStartReq) -> Dict[str, Any]:
 
 @app.post("/api/agent/stop")
 async def api_agent_stop() -> Dict[str, Any]:
-    return _stop_subprocess("agent_proc")
+    return await _stop_subprocess("agent_proc")
 
 
 # -- SSE 日志流 ------------------------------------------------------------
@@ -887,13 +1152,13 @@ async def api_pipeline(req: PipelineReq) -> Dict[str, Any]:
     ex_result = await api_project_extract(ex_req)
     csv_path = ex_result["out_path"]
     # 2) server
-    _stop_subprocess("server_proc")
+    await _stop_subprocess("server_proc")
     sv_req = ServerStartReq(csv=csv_path, host=req.host, port=req.port,
                             ns_index=req.ns_index)
     await api_server_start(sv_req)
     # 3) agent
     if req.also_start_agent:
-        _stop_subprocess("agent_proc")
+        await _stop_subprocess("agent_proc")
         ag_req = AgentStartReq(host="127.0.0.1", port=req.port,
                                config=req.agent_config, csv=csv_path)
         await api_agent_start(ag_req)

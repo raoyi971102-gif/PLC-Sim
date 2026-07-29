@@ -131,6 +131,13 @@ python handshake_agent.py `
 start_gui.bat
 ```
 
+GUI 提供三个独立工作区：
+
+- **提取变量**：发现 GVL、预览并导出 OPC UA 变量 CSV。
+- **编辑程序块**：浏览和修改 POU、GVL、DUT。
+- **OPC UA 仿真**：管理 Server/Agent，并在线搜索、读取和修改当前仿真
+  Server 的变量。写入值会按 CSV 声明的数据类型校验，并在写入后回读确认。
+
 即使没有 MCP bundle，GUI 仍能启动 Server 和 Agent。项目打开、POU 编辑、编译、
 下载尝试和 GVL 提取需要配置下面的 MCP 依赖。
 

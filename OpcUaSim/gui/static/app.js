@@ -5,7 +5,7 @@
 
 // 版本 marker —— F12 Console 里能看到. 如果你看到的是旧样式但这一行没打印,
 // 说明你的浏览器根本没执行这份 app.js (纯缓存旧文件).
-const GUI_BUILD = "2026-07-24_warm+editables+resizer";
+const GUI_BUILD = "2026-07-29_professional-online-vars";
 console.log("%c[OpcUaSim] GUI build " + GUI_BUILD, "color:#3ecf8e;font-weight:bold");
 
 const $ = (id) => document.getElementById(id);
@@ -13,21 +13,32 @@ const el = (sel, ctx = document) => ctx.querySelector(sel);
 const els = (sel, ctx = document) => Array.from(ctx.querySelectorAll(sel));
 
 // ---------------- 通用 API 客户端 ----------------
-async function api(method, url, body) {
+async function api(method, url, body, timeoutMs = 0) {
   const opts = { method, headers: {} };
   if (body !== undefined) {
     opts.headers["content-type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  const timeoutId = controller
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+  if (controller) opts.signal = controller.signal;
+
   let resp;
   try {
     resp = await fetch(url, opts);
   } catch (netErr) {
+    if (netErr.name === "AbortError") {
+      throw new Error(`请求超时（${Math.round(timeoutMs / 1000)} 秒），请刷新状态后重试`);
+    }
     // 典型: 后端崩了/断开、CORS、DNS
     throw new Error(
       "后端连接失败 (" + netErr.message + ")。请检查启动 GUI 的那个 cmd 窗口是否有 Python traceback；" +
       "有的话把整段贴给我。"
     );
+  } finally {
+    if (timeoutId !== null) clearTimeout(timeoutId);
   }
   const text = await resp.text();
   let data;
@@ -38,35 +49,73 @@ async function api(method, url, body) {
 }
 
 const get  = (u)      => api("GET", u);
-const post = (u, b)   => api("POST", u, b || {});
+const post = (u, b, timeoutMs = 0) => api("POST", u, b || {}, timeoutMs);
 
 function showResult(node, ok, text) {
-  node.className = "result " + (ok ? "ok" : "err");
+  if (node.classList.contains("inline-result")) {
+    node.style.color = ok ? "#86efac" : "#fda4af";
+  } else {
+    node.className = "result-box " + (ok ? "success" : "error");
+  }
   node.textContent = text;
 }
 
 function setBusyDisabled(disabled) {
   for (const b of els("button")) {
     if (b.id === "btnClearLog") continue;    // 日志清空永远可点
-    b.disabled = disabled;
+    if (disabled && !b.hasAttribute("data-before-busy-disabled")) {
+      b.setAttribute("data-before-busy-disabled", b.disabled ? "1" : "0");
+      b.disabled = true;
+    } else if (!disabled && b.hasAttribute("data-before-busy-disabled")) {
+      b.disabled = b.getAttribute("data-before-busy-disabled") === "1";
+      b.removeAttribute("data-before-busy-disabled");
+    }
   }
 }
 
 // ---------------- 状态显示 ----------------
+let lastServerRunning = false;
+let currentAppState = null;
+
 function renderState(s) {
-  $("dotMcp").className    = "dot " + (s.mcp_connected ? "on" : (s.busy === "opening" ? "busy" : ""));
-  $("dotServer").className = "dot " + (s.server.running ? "on" : "");
-  $("dotAgent").className  = "dot " + (s.agent.running ? "on" : "");
-  const busyText = s.busy ? ("⏳ " + s.busy) : "";
-  const errText  = s.last_error ? (" · ⚠ 上次错误: " + s.last_error) : "";
-  $("topBusy").textContent = busyText + errText;
-  $("topBusy").style.color = s.last_error ? "#ff9c94" : "#f5a623";
-  $("pidServer").textContent = s.server.pid ?? "—";
-  $("pidAgent").textContent  = s.agent.pid  ?? "—";
-  if (s.project) $("projectPath").placeholder = s.project;
+  const firstState = currentAppState === null;
+  currentAppState = s;
+  $("dotMcp").className = "status-dot " + (s.mcp_connected ? "on" : (s.busy === "opening" ? "busy" : ""));
+  $("dotServer").className = "status-dot " + (s.server.running ? "on" : (s.server.stopping ? "busy" : ""));
+  $("dotAgent").className = "status-dot " + (s.agent.running ? "on" : (s.agent.stopping ? "busy" : ""));
+  $("statusMcpText").textContent = s.mcp_connected ? "已连接" : "未连接";
+  $("statusServerText").textContent = s.server.stopping ? "停止中" : (s.server.running ? "运行中" : "已停止");
+  $("statusAgentText").textContent = s.agent.stopping ? "停止中" : (s.agent.running ? "运行中" : "已停止");
+
+  const stateMessage = s.last_error || (s.busy ? `正在${s.busy}` : "");
+  $("topBusy").textContent = stateMessage;
+  $("topBusy").classList.toggle("hidden", !stateMessage);
+  $("topBusy").style.color = s.last_error ? "#fda4af" : "#fcd34d";
+  $("pidServer").textContent = s.server.pid ? `PID ${s.server.pid}` : "PID --";
+  $("pidAgent").textContent = s.agent.pid ? `PID ${s.agent.pid}` : "PID --";
+  $("serverEndpoint").textContent = s.server.endpoint || "未启动";
+  if (s.project && document.activeElement !== $("projectPath")) $("projectPath").value = s.project;
 
   setBusyDisabled(!!s.busy);
-  ["btnServerStop","btnAgentStop","btnClose"].forEach(id => $(id).disabled = false);
+  $("btnServerStart").disabled = !!s.busy || s.server.running || s.server.stopping;
+  $("btnServerStop").disabled = !!s.busy || s.server.stopping || !s.server.running;
+  $("btnAgentStart").disabled = !!s.busy || s.agent.running || s.agent.stopping;
+  $("btnAgentStop").disabled = !!s.busy || s.agent.stopping || !s.agent.running;
+  $("btnClose").disabled = !!s.busy || !s.project;
+  $("btnRefreshVars").disabled = variablePage.loading || !s.server.running;
+  $("btnVarsPrev").disabled = variablePage.loading || !s.server.running || variablePage.offset <= 0;
+  $("btnVarsNext").disabled =
+    variablePage.loading || !s.server.running ||
+    variablePage.offset + variablePage.limit >= variablePage.total;
+
+  if (s.server.running && !lastServerRunning) {
+    loadServerVariables({ reset: true });
+  } else if (!s.server.running && lastServerRunning) {
+    clearServerVariables("服务已停止。启动 OPC UA Server 后可继续在线读写。");
+  } else if (firstState && !s.server.running) {
+    clearServerVariables("启动 OPC UA Server 后即可查看和修改在线变量。");
+  }
+  lastServerRunning = s.server.running;
 }
 
 async function refreshState() {
@@ -80,6 +129,10 @@ els(".tab").forEach(t => t.addEventListener("click", () => {
   els(".panel").forEach(x => x.classList.remove("active"));
   t.classList.add("active");
   $("tab-" + t.dataset.tab).classList.add("active");
+  el(".workspace").scrollTop = 0;
+  if (t.dataset.tab === "sim" && currentAppState?.server?.running) {
+    loadServerVariables();
+  }
 }));
 
 // ---------------- 项目栏 ----------------
@@ -150,7 +203,7 @@ $("btnDiscover").onclick = async () => {
     const r = await get("/api/project/gvls");
     const list = $("gvlList");
     if (!r.gvls || !r.gvls.length) {
-      list.innerHTML = "<i>未发现 GVL；请在右侧手动填路径。或点【② 编辑程序块 → 拉取项目结构】查看树。</i>";
+      list.innerHTML = "<i>未发现 GVL；可手动填写对象路径，或在“编辑程序块”中查看工程结构。</i>";
       return;
     }
     list.innerHTML = r.gvls.map((g, i) =>
@@ -246,25 +299,25 @@ function renderEditables() {
   for (const k of KIND_ORDER) {
     const items = grouped[k];
     if (!items || !items.length) continue;
-    html.push(`<div class="group-hd">${k} · ${items.length}</div>`);
+    html.push(`<div class="object-group">${k} · ${items.length}</div>`);
     for (const it of items) {
-      const cls = (it.path === _selectedPath) ? "item active" : "item";
+      const cls = (it.path === _selectedPath) ? "object-item active" : "object-item";
       const relPath = it.path.startsWith("Application/") ? it.path.slice("Application/".length) : it.path;
       html.push(
         `<div class="${cls}" data-path="${escapeHtml(it.path)}" data-kind="${it.kind}">` +
-          `<span class="kbadge ${it.kind}">${it.kind}</span>` +
-          `<span class="item-name">${escapeHtml(it.name)}</span>` +
-          (relPath !== it.name ? `<span class="item-path">${escapeHtml(relPath)}</span>` : "") +
+          `<span class="kind-badge">${it.kind}</span>` +
+          `<strong>${escapeHtml(it.name)}</strong>` +
+          (relPath !== it.name ? `<small>${escapeHtml(relPath)}</small>` : "") +
         `</div>`
       );
     }
   }
   box.innerHTML = html.join("");
-  els(".editables .item").forEach(node => {
+  els("#editablesList .object-item").forEach(node => {
     node.onclick = () => {
       _selectedPath = node.dataset.path;
       $("pouPath").value = _selectedPath;
-      $("pouKindBadge").className = "badge " + node.dataset.kind;
+      $("pouKindBadge").className = "kind-badge";
       $("pouKindBadge").textContent = node.dataset.kind;
       renderEditables();     // 高亮
       readPouByPath(_selectedPath);
@@ -333,12 +386,33 @@ $("btnServerStart").onclick = async () => {
       host: $("simHost").value.trim() || "0.0.0.0",
       port: parseInt($("simPort").value, 10) || 4855,
       ns_index: parseInt($("simNs").value, 10) || 4,
+      ns_uri: $("simNsUri").value.trim() || "urn:xuse:sim",
       occupancy_true: $("simOcc").checked,
-    });
+    }, 10000);
     console.log("server started pid=", r.pid);
+    await refreshState();
+    await loadServerVariables({ reset: true });
   } catch (e) { alert(e.message); }
 };
-$("btnServerStop").onclick = async () => { try { await post("/api/server/stop"); } catch(e){ alert(e.message); } };
+async function stopManagedProcess(button, url) {
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "停止中…";
+  try {
+    const result = await post(url, {}, 7000);
+    if (!result.ok) throw new Error(result.message || "停止失败");
+    await refreshState();
+  } catch (e) {
+    alert(e.message);
+    await refreshState();
+  } finally {
+    button.textContent = originalText;
+  }
+}
+
+$("btnServerStop").onclick = () => stopManagedProcess(
+  $("btnServerStop"), "/api/server/stop"
+);
 
 $("btnAgentStart").onclick = async () => {
   try {
@@ -347,30 +421,168 @@ $("btnAgentStart").onclick = async () => {
       port: parseInt($("agentPort").value, 10) || 4855,
       config: $("agentCfg").value.trim() || null,
       csv: $("agentCsv").value.trim() || $("simCsv").value.trim() || null,
-    });
+    }, 10000);
     console.log("agent started pid=", r.pid);
+    await refreshState();
   } catch (e) { alert(e.message); }
 };
-$("btnAgentStop").onclick = async () => { try { await post("/api/agent/stop"); } catch(e){ alert(e.message); } };
+$("btnAgentStop").onclick = () => stopManagedProcess(
+  $("btnAgentStop"), "/api/agent/stop"
+);
 
-// ---------------- Tab: Pipeline ----------------
-$("btnPipeline").onclick = async () => {
-  const body = {
-    include_all: $("plAll").checked,
-    expand_structs: true,
-    ns_index: parseInt($("numNs").value, 10) || 4,
-    ns_prefix: $("txtNsPrefix").value || "uniab|",
-    node_language: "Chinese",
-    host: $("plHost").value.trim() || "0.0.0.0",
-    port: parseInt($("plPort").value, 10) || 4855,
-    also_start_agent: $("plAgent").checked,
-    agent_config: null,
-  };
-  try {
-    const r = await post("/api/pipeline", body);
-    showResult($("pipelineResult"), r.ok, JSON.stringify(r, null, 2));
-  } catch (e) { showResult($("pipelineResult"), false, e.message); }
+// ---------------- 在线变量 ----------------
+const variablePage = {
+  offset: 0,
+  limit: 100,
+  total: 0,
+  query: "",
+  items: [],
+  loading: false,
 };
+let variableSearchTimer = null;
+
+function variableMessage(text, kind = "neutral") {
+  const node = $("serverVarMessage");
+  node.className = `result-box ${kind}`;
+  node.textContent = text;
+}
+
+function clearServerVariables(message) {
+  variablePage.offset = 0;
+  variablePage.total = 0;
+  variablePage.items = [];
+  $("serverVarCount").textContent = "0 个变量";
+  $("serverVarsTable").querySelector("tbody").innerHTML =
+    `<tr><td colspan="5" class="empty-cell">${escapeHtml(message || "暂无在线变量")}</td></tr>`;
+  $("serverVarPageInfo").textContent = "第 0 / 0 页";
+  $("btnVarsPrev").disabled = true;
+  $("btnVarsNext").disabled = true;
+  variableMessage(message || "暂无在线变量");
+}
+
+function renderServerVariables() {
+  const tbody = $("serverVarsTable").querySelector("tbody");
+  const totalPages = variablePage.total ? Math.ceil(variablePage.total / variablePage.limit) : 0;
+  const currentPage = totalPages ? Math.floor(variablePage.offset / variablePage.limit) + 1 : 0;
+  $("serverVarCount").textContent = `${variablePage.total} 个变量`;
+  $("serverVarPageInfo").textContent = `第 ${currentPage} / ${totalPages} 页`;
+  $("btnVarsPrev").disabled = variablePage.loading || variablePage.offset <= 0;
+  $("btnVarsNext").disabled =
+    variablePage.loading || variablePage.offset + variablePage.limit >= variablePage.total;
+
+  if (!variablePage.items.length) {
+    const text = variablePage.query ? "没有匹配的变量" : "当前 CSV 中没有可显示的变量";
+    tbody.innerHTML = `<tr><td colspan="5" class="empty-cell">${text}</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = variablePage.items.map((item, index) => {
+    let editor;
+    if (item.data_type === "BOOLEAN") {
+      const current = item.value === true || String(item.value).toLowerCase() === "true";
+      editor = `<select class="value-editor" aria-label="${escapeHtml(item.name)} 当前值">` +
+        `<option value="true"${current ? " selected" : ""}>true</option>` +
+        `<option value="false"${!current ? " selected" : ""}>false</option></select>`;
+    } else {
+      const isNumeric = ["INT16", "INT32", "FLOAT"].includes(item.data_type);
+      const step = item.data_type === "FLOAT" ? "any" : "1";
+      editor = `<input class="value-editor" ${isNumeric ? `type="number" step="${step}"` : `type="text"`} ` +
+        `value="${escapeHtml(item.value ?? "")}" aria-label="${escapeHtml(item.name)} 当前值">`;
+    }
+    return `<tr data-index="${index}">` +
+      `<td class="variable-name"><strong>${escapeHtml(item.name)}</strong>` +
+      `<small>${escapeHtml(item.english_name || "")}</small></td>` +
+      `<td><span class="type-pill">${escapeHtml(item.data_type)}</span></td>` +
+      `<td>${editor}</td>` +
+      `<td class="node-id">${escapeHtml(item.node_id)}</td>` +
+      `<td><button class="btn small var-save">写入</button></td>` +
+      `</tr>`;
+  }).join("");
+}
+
+async function loadServerVariables({ reset = false } = {}) {
+  if (variablePage.loading) return;
+  if (!currentAppState?.server?.running) {
+    clearServerVariables("启动 OPC UA Server 后即可查看和修改在线变量。");
+    return;
+  }
+  if (reset) variablePage.offset = 0;
+  variablePage.limit = parseInt($("serverVarPageSize").value, 10) || 100;
+  variablePage.query = $("serverVarSearch").value.trim();
+  variablePage.loading = true;
+  $("btnRefreshVars").disabled = true;
+  variableMessage("正在读取服务器变量…");
+  try {
+    const params = new URLSearchParams({
+      query: variablePage.query,
+      offset: String(variablePage.offset),
+      limit: String(variablePage.limit),
+    });
+    const r = await get("/api/server/variables?" + params.toString());
+    variablePage.total = r.total || 0;
+    variablePage.offset = r.offset || 0;
+    variablePage.items = r.items || [];
+    renderServerVariables();
+    variableMessage(
+      variablePage.total
+        ? `已从 ${currentAppState.server.endpoint || "当前服务器"} 读取 ${variablePage.items.length} 个变量。`
+        : (variablePage.query ? "没有匹配的变量。" : "当前服务器没有变量。"),
+      variablePage.total ? "success" : "neutral"
+    );
+  } catch (e) {
+    variableMessage(e.message, "error");
+    variablePage.items = [];
+    renderServerVariables();
+  } finally {
+    variablePage.loading = false;
+    $("btnRefreshVars").disabled = false;
+    renderServerVariables();
+  }
+}
+
+$("btnRefreshVars").onclick = () => loadServerVariables();
+$("serverVarSearch").oninput = () => {
+  clearTimeout(variableSearchTimer);
+  variableSearchTimer = setTimeout(() => loadServerVariables({ reset: true }), 300);
+};
+$("serverVarPageSize").onchange = () => loadServerVariables({ reset: true });
+$("btnVarsPrev").onclick = () => {
+  variablePage.offset = Math.max(0, variablePage.offset - variablePage.limit);
+  loadServerVariables();
+};
+$("btnVarsNext").onclick = () => {
+  if (variablePage.offset + variablePage.limit < variablePage.total) {
+    variablePage.offset += variablePage.limit;
+    loadServerVariables();
+  }
+};
+
+$("serverVarsTable").addEventListener("click", async (event) => {
+  const button = event.target.closest(".var-save");
+  if (!button) return;
+  const row = button.closest("tr");
+  const item = variablePage.items[Number(row.dataset.index)];
+  const editor = row.querySelector(".value-editor");
+  if (!item || !editor) return;
+
+  const oldText = button.textContent;
+  button.disabled = true;
+  button.textContent = "写入中";
+  try {
+    const r = await post("/api/server/variable", {
+      node_id: item.node_id,
+      value: editor.value,
+    }, 7000);
+    item.value = r.value;
+    editor.value = String(r.value);
+    variableMessage(`${item.name} 已写入，服务器回读值为 ${String(r.value)}。`, "success");
+  } catch (e) {
+    variableMessage(`${item.name} 写入失败：${e.message}`, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = oldText;
+  }
+});
 
 // ---------------- 日志 SSE ----------------
 const logBox = $("logBox");
@@ -386,8 +598,11 @@ function appendLog(entry) {
   const t = new Date(entry.ts * 1000);
   const ts = t.toTimeString().slice(0, 8) + "." + String(t.getMilliseconds()).padStart(3, "0");
   const line = document.createElement("div");
-  line.className = "line " + entry.level;
-  line.innerHTML = `<span class="ts">${ts}</span><span class="src">${entry.source}</span>${escapeHtml(entry.msg)}`;
+  line.className = "log-line " + entry.level.toLowerCase();
+  line.innerHTML =
+    `<span class="time">${ts}</span>` +
+    `<span class="level">${escapeHtml(entry.level)}</span>` +
+    `<span><b>${escapeHtml(entry.source)}</b> · ${escapeHtml(entry.msg)}</span>`;
   logBox.appendChild(line);
   while (logBox.children.length > 2000) logBox.removeChild(logBox.firstChild);
   if ($("autoScroll").checked) logBox.scrollTop = logBox.scrollHeight;
@@ -397,9 +612,13 @@ function connectSse() {
   const es = new EventSource("/api/logs/stream");
   es.addEventListener("log",   ev => { try { appendLog(JSON.parse(ev.data)); } catch(_){} });
   es.addEventListener("state", ev => { try { renderState(JSON.parse(ev.data)); } catch(_){} });
-  es.onopen  = () => { $("sseState").textContent = "🟢 已连接"; };
+  es.onopen  = () => {
+    $("sseState").textContent = "已连接";
+    $("sseState").classList.add("on");
+  };
   es.onerror = () => {
-    $("sseState").textContent = "🔴 断开，5s 后重连…";
+    $("sseState").textContent = "已断开，正在重连";
+    $("sseState").classList.remove("on");
     es.close();
     setTimeout(connectSse, 5000);
   };
@@ -481,7 +700,7 @@ setInterval(refreshState, 4000);
   // 折叠按钮
   function setCollapsed(c) {
     logbar.classList.toggle("collapsed", c);
-    collapseBtn.textContent = c ? "▴" : "▾";
+    collapseBtn.textContent = c ? "展开" : "收起";
     if (!c) {
       const h = parseInt(localStorage.getItem(LS_KEY), 10) || 240;
       applyHeight(h);
