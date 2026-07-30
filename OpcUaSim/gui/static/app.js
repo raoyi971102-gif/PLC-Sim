@@ -5,7 +5,7 @@
 
 // 版本 marker —— F12 Console 里能看到. 如果你看到的是旧样式但这一行没打印,
 // 说明你的浏览器根本没执行这份 app.js (纯缓存旧文件).
-const GUI_BUILD = "2026-07-30_log-layout-fix";
+const GUI_BUILD = "2026-07-30_connections-csv-monitors";
 console.log("%c[OpcUaSim] GUI build " + GUI_BUILD, "color:#3ecf8e;font-weight:bold");
 
 const $ = (id) => document.getElementById(id);
@@ -77,6 +77,71 @@ function setBusyDisabled(disabled) {
 let lastServerRunning = false;
 let currentAppState = null;
 
+function formatConnectionDuration(connectedAt) {
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000 - Number(connectedAt || 0)));
+  if (seconds < 60) return `${seconds} 秒`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+  const hours = Math.floor(seconds / 3600);
+  return `${hours} 小时 ${Math.floor((seconds % 3600) / 60)} 分`;
+}
+
+function renderServerConnections(server) {
+  const info = server.connections || {};
+  const tcpCount = Number(info.tcp_connection_count || 0);
+  const sessionCount = Number(info.session_count || 0);
+  $("tcpConnectionCount").textContent = `${tcpCount} 个 TCP 连接`;
+  $("opcSessionCount").textContent = `${sessionCount} 个会话`;
+  const status = $("connectionTelemetryStatus");
+  const tbody = $("connectionTable").querySelector("tbody");
+
+  status.className = "telemetry-status";
+  if (!server.running) {
+    status.textContent = "未运行";
+    $("connectionMessage").textContent =
+      "启动 OPC UA Server 后显示客户端 IP、源端口与 Session 状态。";
+    tbody.innerHTML =
+      '<tr><td colspan="4" class="empty-cell">当前没有客户端连接</td></tr>';
+    return;
+  }
+  if (!info.available) {
+    status.textContent = info.stale ? "数据已过期" : "等待上报";
+    status.classList.add("waiting");
+    $("connectionMessage").textContent =
+      "服务器正在运行，等待连接遥测数据。外部托管模式需使用支持遥测的新版本 server.py。";
+    tbody.innerHTML =
+      '<tr><td colspan="4" class="empty-cell">暂未取得客户端连接数据</td></tr>';
+    return;
+  }
+
+  status.textContent = "实时";
+  status.classList.add("on");
+  $("connectionMessage").textContent =
+    "显示当前活动 TCP 连接；客户端源端口由操作系统临时分配，重连后可能变化。";
+  const clients = Array.isArray(info.clients) ? info.clients : [];
+  if (!clients.length) {
+    tbody.innerHTML =
+      '<tr><td colspan="4" class="empty-cell">Server 正在监听，当前没有客户端连接</td></tr>';
+    return;
+  }
+  tbody.innerHTML = clients.map(client => {
+    const sessionState = String(client.session_state || "None");
+    const active = sessionState === "Activated";
+    const sessionText = active
+      ? "Session 已建立"
+      : sessionState === "Created"
+        ? "Session 待激活"
+        : sessionState === "Closed"
+          ? "Session 已关闭"
+          : "仅 TCP 连接";
+    return `<tr>` +
+      `<td class="connection-client">${escapeHtml(client.host || "未知地址")}</td>` +
+      `<td class="connection-port">${escapeHtml(client.port ?? "--")}</td>` +
+      `<td><span class="session-state${active ? " active" : ""}">${sessionText}</span></td>` +
+      `<td class="connection-duration">${formatConnectionDuration(client.connected_at)}</td>` +
+      `</tr>`;
+  }).join("");
+}
+
 function renderState(s) {
   const firstState = currentAppState === null;
   currentAppState = s;
@@ -98,6 +163,8 @@ function renderState(s) {
   $("pidServer").textContent = s.server.pid ? `PID ${s.server.pid}` : "PID --";
   $("pidAgent").textContent = s.agent.pid ? `PID ${s.agent.pid}` : "PID --";
   $("serverEndpoint").textContent = s.server.endpoint || "未启动";
+  renderServerConnections(s.server);
+  syncMonitorProfile(s.server.csv_id, s.server.running);
   if (s.project && document.activeElement !== $("projectPath")) $("projectPath").value = s.project;
 
   setBusyDisabled(!!s.busy);
@@ -479,9 +546,16 @@ const variablePage = {
   items: [],
   loading: false,
 };
-const MONITOR_STORAGE_KEY = "opcuasim.monitored-variables.v1";
+const MONITOR_STORAGE_KEY = "opcuasim.monitored-variables.v2";
+const LEGACY_MONITOR_STORAGE_KEY = "opcuasim.monitored-variables.v1";
 const selectedVariables = new Map();
-let monitoredVariables = loadStoredMonitors();
+const monitorStore = loadMonitorStore();
+let activeMonitorCsvId = monitorStore.last_csv_id || null;
+let monitoredVariables = hydrateStoredMonitors(
+  activeMonitorCsvId && monitorStore.profiles[activeMonitorCsvId]
+    ? monitorStore.profiles[activeMonitorCsvId].items
+    : monitorStore.legacy_items
+);
 const monitorState = { loading: false };
 let variableSearchTimer = null;
 let monitorRefreshTimer = null;
@@ -498,38 +572,158 @@ function monitorMessage(text, kind = "neutral") {
   node.textContent = text;
 }
 
-function loadStoredMonitors() {
+function sanitizeStoredMonitors(items) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .filter(item => item && item.node_id && item.name && item.data_type)
+    .slice(0, 200)
+    .map(item => ({
+      name: String(item.name),
+      english_name: String(item.english_name || ""),
+      data_type: String(item.data_type),
+      node_id: String(item.node_id),
+    }));
+}
+
+function hydrateStoredMonitors(items) {
+  return sanitizeStoredMonitors(items).map(item => ({
+    ...item,
+    value: null,
+    draft: null,
+    missing: false,
+    offline: true,
+  }));
+}
+
+function loadMonitorStore() {
+  const empty = {
+    version: 2,
+    last_csv_id: null,
+    profiles: {},
+    legacy_items: [],
+  };
   try {
-    const stored = JSON.parse(localStorage.getItem(MONITOR_STORAGE_KEY) || "[]");
-    if (!Array.isArray(stored)) return [];
-    return stored
-      .filter(item => item && item.node_id && item.name && item.data_type)
-      .slice(0, 200)
-      .map(item => ({
-        name: String(item.name),
-        english_name: String(item.english_name || ""),
-        data_type: String(item.data_type),
-        node_id: String(item.node_id),
-        value: null,
-        draft: null,
-        missing: false,
-        offline: true,
-      }));
+    const raw = JSON.parse(localStorage.getItem(MONITOR_STORAGE_KEY) || "null");
+    if (raw && raw.version === 2 && raw.profiles && typeof raw.profiles === "object") {
+      for (const [csvId, profile] of Object.entries(raw.profiles)) {
+        if (!/^[a-f0-9]{64}$/.test(csvId) || !profile) continue;
+        empty.profiles[csvId] = {
+          updated_at: Number(profile.updated_at || 0),
+          items: sanitizeStoredMonitors(profile.items),
+        };
+      }
+      if (raw.last_csv_id && empty.profiles[raw.last_csv_id]) {
+        empty.last_csv_id = raw.last_csv_id;
+      }
+      return empty;
+    }
   } catch (_) {
-    return [];
+    // v2 损坏时继续尝试迁移旧版监控列表。
+  }
+  try {
+    empty.legacy_items = sanitizeStoredMonitors(
+      JSON.parse(localStorage.getItem(LEGACY_MONITOR_STORAGE_KEY) || "[]")
+    );
+  } catch (_) {
+    empty.legacy_items = [];
+  }
+  return empty;
+}
+
+function writeMonitorStore() {
+  try {
+    const profileIds = Object.keys(monitorStore.profiles);
+    if (profileIds.length > 25) {
+      profileIds
+        .filter(csvId => csvId !== activeMonitorCsvId)
+        .sort((a, b) =>
+          Number(monitorStore.profiles[a].updated_at || 0) -
+          Number(monitorStore.profiles[b].updated_at || 0)
+        )
+        .slice(0, profileIds.length - 25)
+        .forEach(csvId => { delete monitorStore.profiles[csvId]; });
+    }
+    localStorage.setItem(MONITOR_STORAGE_KEY, JSON.stringify({
+      version: 2,
+      last_csv_id: monitorStore.last_csv_id,
+      profiles: monitorStore.profiles,
+    }));
+    localStorage.removeItem(LEGACY_MONITOR_STORAGE_KEY);
+  } catch (e) {
+    console.warn("无法保存监控栏:", e);
   }
 }
 
 function persistMonitors() {
-  try {
-    localStorage.setItem(MONITOR_STORAGE_KEY, JSON.stringify(
-      monitoredVariables.map(({ name, english_name, data_type, node_id }) => ({
-        name, english_name, data_type, node_id,
-      }))
-    ));
-  } catch (e) {
-    console.warn("无法保存监控栏:", e);
+  const items = sanitizeStoredMonitors(monitoredVariables);
+  if (!activeMonitorCsvId) {
+    monitorStore.legacy_items = items;
+    try {
+      localStorage.setItem(LEGACY_MONITOR_STORAGE_KEY, JSON.stringify(items));
+    } catch (e) {
+      console.warn("无法保存待归属的监控栏:", e);
+    }
+    return;
   }
+  monitorStore.profiles[activeMonitorCsvId] = {
+    updated_at: Date.now(),
+    items,
+  };
+  monitorStore.last_csv_id = activeMonitorCsvId;
+  monitorStore.legacy_items = [];
+  writeMonitorStore();
+}
+
+function updateMonitorCsvBadge(running = !!currentAppState?.server?.running) {
+  const badge = $("monitorCsvBadge");
+  if (!activeMonitorCsvId) {
+    badge.textContent = "等待变量表";
+    badge.title = "Server 启动并识别变量表后，监控列表将按 CSV 保存";
+    return;
+  }
+  const shortId = activeMonitorCsvId.slice(0, 10);
+  badge.textContent = `${running ? "当前" : "已保存"} · ${shortId}`;
+  badge.title = `变量表指纹：${activeMonitorCsvId}`;
+}
+
+function syncMonitorProfile(csvId, running) {
+  if (!running || !csvId) {
+    updateMonitorCsvBadge(false);
+    return;
+  }
+  if (csvId === activeMonitorCsvId) {
+    updateMonitorCsvBadge(true);
+    return;
+  }
+
+  const legacyItems = activeMonitorCsvId
+    ? []
+    : sanitizeStoredMonitors(monitoredVariables.length
+      ? monitoredVariables
+      : monitorStore.legacy_items);
+  if (activeMonitorCsvId) persistMonitors();
+  activeMonitorCsvId = csvId;
+  const profile = monitorStore.profiles[csvId];
+  const restoredItems = profile?.items || legacyItems;
+  monitoredVariables = hydrateStoredMonitors(restoredItems);
+  selectedVariables.clear();
+  monitorStore.profiles[csvId] = {
+    updated_at: Date.now(),
+    items: sanitizeStoredMonitors(monitoredVariables),
+  };
+  monitorStore.last_csv_id = csvId;
+  monitorStore.legacy_items = [];
+  writeMonitorStore();
+  renderMonitoredVariables();
+  renderServerVariables();
+  scheduleMonitorRefresh();
+  updateMonitorCsvBadge(true);
+  monitorMessage(
+    monitoredVariables.length
+      ? `已切换到当前变量表，并恢复 ${monitoredVariables.length} 个监控变量。`
+      : "已切换到当前变量表；这是首次使用，尚未保存监控变量。",
+    monitoredVariables.length ? "success" : "neutral"
+  );
 }
 
 function isMonitored(nodeId) {
@@ -832,6 +1026,7 @@ async function refreshMonitoredVariables({ announce = true } = {}) {
         item.value = fresh.value;
       }
     });
+    persistMonitors();
 
     variablePage.items.forEach(item => {
       const fresh = values.get(item.node_id);
@@ -945,6 +1140,7 @@ $("monitorVarsTable").addEventListener("click", async event => {
 });
 
 renderMonitoredVariables();
+updateMonitorCsvBadge(false);
 
 // ---------------- 日志 SSE ----------------
 const logBox = $("logBox");
@@ -988,7 +1184,7 @@ function connectSse() {
 
 connectSse();
 refreshState();
-setInterval(refreshState, 4000);
+setInterval(refreshState, 2000);
 
 // 顶栏 build badge —— 拉后端 /api/version 显示后端启动时间, 帮助判断是不是老 backend
 (async function updateBuildBadge() {

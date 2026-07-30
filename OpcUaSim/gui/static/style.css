@@ -435,6 +435,67 @@ tbody tr:hover td { background: rgba(45, 212, 191, 0.025); }
 .service-card .form-grid { flex: 1; }
 .compact-switch { margin-top: 14px; padding: 10px 12px; }
 .card-actions { margin-top: 18px; justify-content: flex-end; }
+.connection-card {
+  border-color: rgba(96, 165, 250, .2);
+  background: linear-gradient(150deg, rgba(12, 28, 40, .98), rgba(9, 20, 30, .98));
+}
+.connection-header { align-items: center; }
+.session-badge, .csv-profile-badge, .telemetry-status {
+  padding: 4px 7px;
+  border: 1px solid rgba(96, 165, 250, .25);
+  border-radius: 5px;
+  color: #bfdbfe;
+  background: rgba(96, 165, 250, .07);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.csv-profile-badge {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #a7f3d0;
+  border-color: rgba(45, 212, 191, .25);
+  background: rgba(45, 212, 191, .06);
+}
+.telemetry-status {
+  color: #718999;
+  border-color: var(--line-soft);
+  background: #0a1620;
+}
+.telemetry-status.on {
+  color: #86efac;
+  border-color: rgba(74, 222, 128, .25);
+  background: rgba(74, 222, 128, .06);
+}
+.telemetry-status.waiting { color: #fcd34d; }
+.connection-table-wrap { margin-top: 12px; max-height: 190px; }
+.connection-table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.connection-table th:nth-child(1) { width: 34%; }
+.connection-table th:nth-child(2) { width: 18%; }
+.connection-table th:nth-child(3) { width: 28%; }
+.connection-table th:nth-child(4) { width: 20%; }
+.connection-client {
+  color: #d4e4eb;
+  font: 12px/1.4 "Cascadia Code", Consolas, monospace;
+}
+.connection-port { color: #93c5fd; font: 12px Consolas, monospace; }
+.session-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #8fa7b6;
+  font-size: 11px;
+}
+.session-state::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #526675;
+}
+.session-state.active { color: #86efac; }
+.session-state.active::before { background: #4ade80; }
+.connection-duration { color: #718999; font-variant-numeric: tabular-nums; }
 .variables-header { align-items: center; }
 .title-line { display: flex; align-items: center; gap: 10px; }
 .title-line h2 { margin-bottom: 0; }

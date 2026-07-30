@@ -17,11 +17,14 @@ XUSE OPC UA 仿真服务器（纯服务器版）
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, MutableMapping
 
 from opcua import Server, ua
 
@@ -30,6 +33,7 @@ from common import (
     VTYPE_MAP,
     NodeDef,
     OCC_RE,
+    connection_state_path,
     default_csv_path,
     load_csvs,
     setup_logging,
@@ -112,6 +116,89 @@ def set_initial_occupancy(nodes_by_cn: Dict[str, Any], enable: bool) -> int:
     return count
 
 
+def collect_connection_snapshot(
+    server: Server,
+    endpoint: str,
+    first_seen: MutableMapping[int, float],
+) -> Dict[str, Any]:
+    """采集当前 TCP 客户端及 OPC UA Session 状态。
+
+    ``python-opcua`` 在 ``bserver.clients`` 中保存活动 TCP 协议实例；每个实例
+    都带有 peername 和 processor.session。复制列表后再遍历，避免异步网络线程
+    增删客户端时影响本次快照。
+    """
+    now = time.time()
+    clients = list(getattr(getattr(server, "bserver", None), "clients", []) or [])
+    active_keys = {id(client) for client in clients}
+    for key in list(first_seen):
+        if key not in active_keys:
+            first_seen.pop(key, None)
+
+    items: List[Dict[str, Any]] = []
+    for client in clients:
+        key = id(client)
+        connected_at = first_seen.setdefault(key, now)
+        peer = getattr(client, "peername", None) or ()
+        local = getattr(getattr(client, "processor", None), "sockname", None) or ()
+        session = getattr(getattr(client, "processor", None), "session", None)
+        session_state = "None"
+        session_id = None
+        if session is not None:
+            state = getattr(session, "state", None)
+            session_state = getattr(state, "name", None) or str(state).rsplit(".", 1)[-1]
+            raw_session_id = getattr(session, "session_id", None)
+            if raw_session_id is not None:
+                session_id = (
+                    raw_session_id.to_string()
+                    if hasattr(raw_session_id, "to_string")
+                    else str(raw_session_id)
+                )
+
+        items.append({
+            "host": str(peer[0]) if len(peer) >= 1 else "",
+            "port": int(peer[1]) if len(peer) >= 2 else None,
+            "local_host": str(local[0]) if len(local) >= 1 else "",
+            "local_port": int(local[1]) if len(local) >= 2 else None,
+            "connected_at": connected_at,
+            "session_state": session_state,
+            "session_id": session_id,
+        })
+
+    items.sort(key=lambda item: (item["host"], item["port"] or 0))
+    return {
+        "version": 1,
+        "server_pid": os.getpid(),
+        "generated_at": now,
+        "endpoint": endpoint,
+        "tcp_connection_count": len(items),
+        "session_count": sum(
+            item["session_state"] == "Activated" for item in items
+        ),
+        "clients": items,
+    }
+
+
+def write_connection_snapshot(path: Path, snapshot: Dict[str, Any]) -> None:
+    """原子写入连接状态，避免 GUI 读到半份 JSON。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(
+        json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+
+
+def remove_own_connection_snapshot(path: Path) -> None:
+    """仅删除由当前进程生成的状态，避免旧进程误删新 Server 的快照。"""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("server_pid") == os.getpid():
+            path.unlink(missing_ok=True)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
@@ -130,6 +217,11 @@ def main() -> int:
     parser.add_argument("--ns-index", type=int, default=4, help="XUSE 命名空间索引 (默认 4)")
     parser.add_argument("--no-occupancy-true", action="store_true",
                         help="禁用 '_占位 / _空闲' 节点初值默认 TRUE")
+    parser.add_argument(
+        "--connection-state",
+        default=str(connection_state_path()),
+        help="连接状态 JSON 路径（供 GUI 展示客户端连接）",
+    )
     args = parser.parse_args()
 
     csv_paths = [Path(p).resolve() for p in (args.csv or [default_csv])]
@@ -146,6 +238,7 @@ def main() -> int:
     endpoint = f"opc.tcp://{args.host}:{args.port}/xuse_sim/"
     server = build_server(endpoint)
     ns_idx = register_ns_padding(server, args.ns_index, args.ns_uri)
+    connection_path = Path(args.connection_state).expanduser().resolve()
 
     server.start()
     log.info("=" * 68)
@@ -172,10 +265,22 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
 
+        first_seen: Dict[int, float] = {}
+        last_state_error: str = ""
         while not stop_evt.is_set():
-            stop_evt.wait(timeout=1.0)
+            try:
+                snapshot = collect_connection_snapshot(server, endpoint, first_seen)
+                write_connection_snapshot(connection_path, snapshot)
+                last_state_error = ""
+            except Exception as exc:  # noqa: BLE001
+                error = str(exc)
+                if error != last_state_error:
+                    log.warning("写入客户端连接状态失败: %s", exc)
+                    last_state_error = error
+            stop_evt.wait(timeout=0.5)
     finally:
         server.stop()
+        remove_own_connection_snapshot(connection_path)
         log.info("服务器已停止。")
     return 0
 

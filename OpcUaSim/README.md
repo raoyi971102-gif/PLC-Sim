@@ -178,8 +178,12 @@ GUI 提供三个独立工作区：
 - **编辑程序块**：浏览和修改 POU、GVL、DUT。
 - **OPC UA 仿真**：管理 Server/Agent；从全部变量中搜索、勾选节点并加入
   监控栏，在监控栏中定时读取或手动刷新，并进行变量写入。写入值会按 CSV
-  声明的数据类型校验，并在写入后回读确认。监控列表保存在当前浏览器中，
-  刷新页面后仍会保留。
+  声明的数据类型校验，并在写入后回读确认。GUI 会根据规范化变量定义计算
+  CSV 指纹，并在当前浏览器中分别保存每份变量表的监控列表；刷新页面或切回
+  相同 CSV 后会自动恢复。
+- **客户端连接**：展示当前 TCP 连接数、已激活的 OPC UA Session 数，以及
+  客户端 IP、源端口、Session 状态和连接时长。客户端源端口由客户端操作系统
+  临时分配，重连后可能变化。
 
 即使没有 MCP bundle，GUI 仍能启动 Server 和 Agent。项目打开、POU 编辑、编译、
 下载尝试和 GVL 提取需要配置下面的 MCP 依赖。
@@ -205,6 +209,10 @@ python -m gui.backend \
 ```bash
 python tests/integration/remote_attach_check.py
 ```
+
+客户端连接遥测默认写入 `data/runtime/server-connections.json`。外部托管时，
+Server 与 GUI 必须使用同一项目目录；如果两个进程的运行目录不同，请为两者
+设置相同的 `OPCUASIM_CONNECTION_STATE` 绝对路径。该运行时目录不会提交到 Git。
 
 ## 可选：InoProShop MCP
 

@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -51,18 +53,26 @@ def wait_ready(deadline: float) -> None:
 
 
 def main() -> int:
+    connection_state = (
+        Path(tempfile.gettempdir())
+        / f"opcuasim-connections-{os.getpid()}.json"
+    )
+    child_env = os.environ.copy()
+    child_env["OPCUASIM_CONNECTION_STATE"] = str(connection_state)
     procs = [
         subprocess.Popen([sys.executable, str(ROOT / "server.py"),
                           "--host", "127.0.0.1", "--port", str(OPC_PORT),
                           "--csv", str(CSV)],
-                         cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+                         cwd=ROOT, env=child_env,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
     ]
     time.sleep(4)
     procs.append(
         subprocess.Popen([sys.executable, "-m", "gui.backend",
                           "--host", "127.0.0.1", "--port", "18799", "--no-open",
                           "--attach-url", OPC_URL, "--attach-csv", str(CSV)],
-                         cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                         cwd=ROOT, env=child_env,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     )
     try:
         wait_ready(time.monotonic() + 30)
@@ -73,6 +83,7 @@ def main() -> int:
         assert srv["running"] is True, f"挂接后应上报运行中: {srv}"
         assert srv["endpoint"] == OPC_URL, f"endpoint 不符: {srv}"
         assert srv["variable_count"] == 16, f"变量数应为 16: {srv}"
+        assert srv["connections"]["available"] is True, f"连接遥测不可用: {srv}"
         assert state["agent"]["attached"] is True, "Agent 也应标记为外部托管"
         print(f"[test] 挂接状态 OK：{srv['variable_count']} 个变量 @ {srv['endpoint']}")
 
@@ -150,6 +161,7 @@ def main() -> int:
                 p.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 p.kill()
+        connection_state.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

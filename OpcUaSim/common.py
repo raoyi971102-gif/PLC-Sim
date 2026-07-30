@@ -13,12 +13,14 @@ XUSE OPC UA 仿真项目 —— 公共工具模块
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import logging
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from opcua import ua
 
@@ -50,6 +52,7 @@ log = logging.getLogger("XUSE-common")
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent
 BUILTIN_DEMO_CSV = PROJECT_ROOT / "data" / "demo_variables.csv"
+DEFAULT_CONNECTION_STATE = PROJECT_ROOT / "data" / "runtime" / "server-connections.json"
 
 
 def default_csv_path() -> Path:
@@ -58,6 +61,14 @@ def default_csv_path() -> Path:
     if configured:
         return Path(configured).expanduser().resolve()
     return BUILTIN_DEMO_CSV
+
+
+def connection_state_path() -> Path:
+    """返回 Server 与 GUI 共享的连接状态文件路径。"""
+    configured = os.environ.get("OPCUASIM_CONNECTION_STATE")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return DEFAULT_CONNECTION_STATE
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +107,30 @@ class NodeDef:
     node_type: str        # VARIABLE / METHOD
     data_type: str        # BOOLEAN / INT16 / ...
     node_id: str          # ns=4;s=uniab|<name_cn>
+
+
+def node_defs_fingerprint(nodes: Sequence[NodeDef]) -> str:
+    """为变量定义生成稳定指纹，用于按 CSV 恢复前端监控列表。
+
+    指纹按 NodeId 排序后计算，因此相同变量表即使文件路径、编码或行顺序不同，
+    仍会得到同一个标识；变量名、类型或 NodeId 变化则会得到新标识。
+    """
+    normalized = sorted(
+        (
+            node.node_id,
+            node.name_cn,
+            node.name_en,
+            node.node_type,
+            node.data_type,
+        )
+        for node in nodes
+    )
+    payload = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def load_csv(path: Path) -> List[NodeDef]:

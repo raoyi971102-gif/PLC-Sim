@@ -43,7 +43,14 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from common import NodeDef, VTYPE_MAP, default_csv_path, load_csvs
+from common import (
+    NodeDef,
+    VTYPE_MAP,
+    connection_state_path,
+    default_csv_path,
+    load_csvs,
+    node_defs_fingerprint,
+)
 from ino_mcp.client import McpClient, McpError
 from ino_mcp.config import resolve_mcp_config
 from ino_mcp.toolkit import InoToolkit, DownloadStrategy
@@ -138,6 +145,7 @@ class AppState:
     server_client_url: Optional[str] = None
     server_csv_paths: List[str] = field(default_factory=list)
     server_node_defs: List[NodeDef] = field(default_factory=list)
+    server_csv_id: Optional[str] = None
     last_extract_csv: Optional[str] = None
     last_extract_count: int = 0
     stopping: Set[str] = field(default_factory=set)
@@ -155,21 +163,29 @@ class AppState:
         def _alive(p: Optional[subprocess.Popen]) -> Optional[int]:
             return p.pid if p and p.poll() is None else None
 
+        server_pid = _alive(self.server_proc)
+        server_running = self.attached or (
+            server_pid is not None and bool(self.server_client_url)
+        )
         return {
             "project": self.current_project,
             "mcp_connected": self.mcp is not None,
             "busy": self.busy,
             "server": {
-                "pid": _alive(self.server_proc),
+                "pid": server_pid,
                 # endpoint 就绪前不报 running：否则前端会在 _wait_for_opc_server
                 # 的窗口里抢跑去拉变量，吃一个 409 后就不会再自动重试
-                "running": self.attached or (_alive(self.server_proc) is not None
-                                             and bool(self.server_client_url)),
+                "running": server_running,
                 "stopping": "server_proc" in self.stopping,
                 "attached": self.attached,
                 "endpoint": self.server_client_url,
                 "variable_count": len(self.server_node_defs),
                 "csv": list(self.server_csv_paths),
+                "csv_id": self.server_csv_id,
+                "connections": _read_server_connection_state(
+                    expected_pid=server_pid,
+                    running=server_running,
+                ),
             },
             "agent": {
                 "pid": _alive(self.agent_proc),
@@ -185,6 +201,48 @@ class AppState:
 
 _STATE = AppState()
 log = logging.getLogger("gui")
+
+
+def _empty_connection_state(*, available: bool = False, stale: bool = False) -> Dict[str, Any]:
+    return {
+        "available": available,
+        "stale": stale,
+        "generated_at": None,
+        "tcp_connection_count": 0,
+        "session_count": 0,
+        "clients": [],
+    }
+
+
+def _read_server_connection_state(
+    *,
+    expected_pid: Optional[int],
+    running: bool,
+) -> Dict[str, Any]:
+    """读取 Server 写入的连接快照并过滤过期或其他进程的数据。"""
+    if not running:
+        return _empty_connection_state()
+    try:
+        payload = json.loads(connection_state_path().read_text(encoding="utf-8"))
+        generated_at = float(payload["generated_at"])
+        server_pid = int(payload["server_pid"])
+        if time.time() - generated_at > 3.0:
+            return _empty_connection_state(stale=True)
+        if expected_pid is not None and server_pid != expected_pid:
+            return _empty_connection_state(stale=True)
+        clients = payload.get("clients")
+        if not isinstance(clients, list):
+            raise ValueError("clients 不是列表")
+        return {
+            "available": True,
+            "stale": False,
+            "generated_at": generated_at,
+            "tcp_connection_count": int(payload.get("tcp_connection_count", len(clients))),
+            "session_count": int(payload.get("session_count", 0)),
+            "clients": clients[:200],
+        }
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return _empty_connection_state()
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +303,7 @@ def _attach_external_server() -> None:
     _STATE.server_client_url = url
     _STATE.server_csv_paths = [str(csv_path.resolve())]
     _STATE.server_node_defs = node_defs
+    _STATE.server_csv_id = node_defs_fingerprint(node_defs)
     log.info("已挂接外部 Server: %s (%d 个变量, CSV=%s)", url, len(node_defs), csv_path)
 
 
@@ -801,10 +860,14 @@ def _python_subprocess_env() -> Dict[str, str]:
     return env
 
 
-def _clear_server_metadata() -> None:
+def _clear_server_metadata(*, remove_connection_state: bool = False) -> None:
     _STATE.server_client_url = None
     _STATE.server_csv_paths = []
     _STATE.server_node_defs = []
+    _STATE.server_csv_id = None
+    if remove_connection_state:
+        with contextlib.suppress(OSError):
+            connection_state_path().unlink(missing_ok=True)
 
 
 def _server_client_host(host: str) -> str:
@@ -882,7 +945,7 @@ async def _stop_subprocess(field_name: str) -> Dict[str, Any]:
         if proc is None or proc.poll() is not None:
             setattr(_STATE, field_name, None)
             if field_name == "server_proc":
-                _clear_server_metadata()
+                _clear_server_metadata(remove_connection_state=not _STATE.attached)
             return {"ok": True, "message": "已经停止或未运行"}
 
         log.info("终止子进程 %s pid=%d", field_name, proc.pid)
@@ -892,7 +955,7 @@ async def _stop_subprocess(field_name: str) -> Dict[str, Any]:
             if result["ok"] and getattr(_STATE, field_name) is proc:
                 setattr(_STATE, field_name, None)
                 if field_name == "server_proc":
-                    _clear_server_metadata()
+                    _clear_server_metadata(remove_connection_state=True)
             if result.get("forced"):
                 log.warning("子进程 %s pid=%d 未及时退出，已强制终止", field_name, proc.pid)
             return result
@@ -966,7 +1029,7 @@ async def api_server_start(req: ServerStartReq) -> Dict[str, Any]:
     if _STATE.server_proc is not None and _STATE.server_proc.poll() is None:
         raise HTTPException(400, "Server 已在运行；请先停止")
     _STATE.server_proc = None
-    _clear_server_metadata()
+    _clear_server_metadata(remove_connection_state=True)
     csv_path = req.csv or _STATE.last_extract_csv or str(default_csv_path())
     if not Path(csv_path).exists():
         raise HTTPException(400, f"CSV 不存在: {csv_path}")
@@ -983,7 +1046,8 @@ async def api_server_start(req: ServerStartReq) -> Dict[str, Any]:
     cmd = [py, str(server_py),
            "--host", req.host, "--port", str(req.port),
            "--csv", resolved_csv,
-           "--ns-index", str(req.ns_index), "--ns-uri", req.ns_uri]
+           "--ns-index", str(req.ns_index), "--ns-uri", req.ns_uri,
+           "--connection-state", str(connection_state_path())]
     if not req.occupancy_true:
         cmd.append("--no-occupancy-true")
 
@@ -999,11 +1063,12 @@ async def api_server_start(req: ServerStartReq) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         await asyncio.to_thread(_terminate_and_wait, proc)
         _STATE.server_proc = None
-        _clear_server_metadata()
+        _clear_server_metadata(remove_connection_state=True)
         raise HTTPException(500, f"Server 启动失败: {exc}") from exc
     _STATE.server_client_url = client_url
     _STATE.server_csv_paths = [resolved_csv]
     _STATE.server_node_defs = node_defs
+    _STATE.server_csv_id = node_defs_fingerprint(node_defs)
     return {"ok": True, "pid": proc.pid}
 
 

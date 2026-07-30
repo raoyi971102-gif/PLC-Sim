@@ -17,6 +17,7 @@ venv/
 *.log
 OpcUaSim/extracted/
 OpcUaSim/data/uploads/
+OpcUaSim/data/runtime/
 OpcUaSim/VERSION
 
 # IDE / OS

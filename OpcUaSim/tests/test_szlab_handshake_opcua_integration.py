@@ -5,7 +5,14 @@ import socket
 from opcua import ua
 
 from common import NodeDef
-from server import add_nodes, build_server, register_ns_padding
+from server import (
+    add_nodes,
+    build_server,
+    collect_connection_snapshot,
+    register_ns_padding,
+    remove_own_connection_snapshot,
+    write_connection_snapshot,
+)
 from szlab_handshake_agent import SzlabHandshakeSimulator
 
 
@@ -15,7 +22,7 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def test_robot_handshake_against_real_opcua_server():
+def test_robot_handshake_against_real_opcua_server(tmp_path):
     port = _free_port()
     endpoint = f"opc.tcp://127.0.0.1:{port}/xuse_sim/"
     definitions = [
@@ -51,6 +58,20 @@ def test_robot_handshake_against_real_opcua_server():
     try:
         simulator.connect(timeout=3.0)
         simulator.initialize()
+
+        first_seen = {}
+        connections = collect_connection_snapshot(server, endpoint, first_seen)
+        assert connections["tcp_connection_count"] == 1
+        assert connections["session_count"] == 1
+        assert connections["clients"][0]["host"] == "127.0.0.1"
+        assert isinstance(connections["clients"][0]["port"], int)
+        assert connections["clients"][0]["session_state"] == "Activated"
+
+        state_path = tmp_path / "server-connections.json"
+        write_connection_snapshot(state_path, connections)
+        assert state_path.exists()
+        remove_own_connection_snapshot(state_path)
+        assert not state_path.exists()
 
         nodes["任务号"].set_value(ua.Variant(17, ua.VariantType.Int32))
         nodes["Robot_任务写入完成"].set_value(

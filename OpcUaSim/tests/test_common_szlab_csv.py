@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from common import load_csv
+from common import NodeDef, load_csv, node_defs_fingerprint
 
 
 def test_load_utf16_tab_separated_szlab_csv(tmp_path):
@@ -28,3 +28,13 @@ def test_load_utf16_tab_separated_szlab_csv(tmp_path):
     ]
     assert nodes[0].node_id == "ns=4;s=上位机通讯|Robot_Home"
     assert nodes[1].node_id == "ns=4;s=上位机通讯|任务号"
+
+
+def test_node_defs_fingerprint_is_semantic_and_order_independent():
+    first = NodeDef("变量A", "A", "VARIABLE", "BOOLEAN", "ns=4;s=变量A")
+    second = NodeDef("变量B", "B", "VARIABLE", "INT32", "ns=4;s=变量B")
+
+    assert node_defs_fingerprint([first, second]) == node_defs_fingerprint(
+        [second, first]
+    )
+    assert node_defs_fingerprint([first]) != node_defs_fingerprint([second])
