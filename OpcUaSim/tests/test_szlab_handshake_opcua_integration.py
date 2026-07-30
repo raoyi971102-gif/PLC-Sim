@@ -49,6 +49,20 @@ def test_robot_handshake_against_real_opcua_server(tmp_path):
             "INT32",
             "ns=4;s=上位机通讯|Robot_任务完成",
         ),
+        NodeDef(
+            "S04取放料编号",
+            "",
+            "VARIABLE",
+            "INT32",
+            "ns=4;s=上位机通讯|S04取放料编号",
+        ),
+        NodeDef(
+            "传感器状态_上位机[2].NO[10]",
+            "",
+            "VARIABLE",
+            "BOOLEAN",
+            "ns=4;s=上位机通讯|传感器状态_上位机[2].NO[10]",
+        ),
     ]
     server = build_server(endpoint)
     namespace_index = register_ns_padding(server, 4, "urn:szlab:test")
@@ -73,22 +87,24 @@ def test_robot_handshake_against_real_opcua_server(tmp_path):
         remove_own_connection_snapshot(state_path)
         assert not state_path.exists()
 
-        nodes["任务号"].set_value(ua.Variant(17, ua.VariantType.Int32))
+        nodes["S04取放料编号"].set_value(ua.Variant(1, ua.VariantType.Int32))
+        nodes["任务号"].set_value(ua.Variant(7, ua.VariantType.Int32))
         nodes["Robot_任务写入完成"].set_value(
             ua.Variant(True, ua.VariantType.Boolean)
         )
         simulator.tick(now=1.0)
         simulator.tick(now=1.01)
 
-        assert nodes["Robot_任务完成"].get_value() == 17
+        assert nodes["Robot_任务完成"].get_value() == 7
         assert nodes["Robot_任务允许写入"].get_value() is False
+        assert nodes["传感器状态_上位机[2].NO[10]"].get_value() is True
 
         nodes["Robot_任务写入完成"].set_value(
             ua.Variant(False, ua.VariantType.Boolean)
         )
-        nodes["任务号"].set_value(ua.Variant(0, ua.VariantType.Int32))
         simulator.tick(now=1.02)
 
+        assert nodes["任务号"].get_value() == 7
         assert nodes["Robot_任务完成"].get_value() == 0
         assert nodes["Robot_任务允许写入"].get_value() is True
     finally:

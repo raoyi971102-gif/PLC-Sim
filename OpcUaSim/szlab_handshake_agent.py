@@ -1,14 +1,15 @@
 """
-SZLab Poly Studio 握手仿真驱动。
+SZLab Poly Studio OPC UA 握手仿真驱动。
 
-本进程作为 OPC UA Client 连接已有仿真 Server，按 Uni-Lab-OS 中 SZLab
-设备驱动的实际契约模拟 PLC 侧响应：
+本进程作为 OPC UA Client 连接已有仿真 Server，并按 Uni-Lab-SZLab 的
+``szlab_workflow_handshake.py`` 模拟 PLC 侧行为。与简单的通用握手不同，
+这里保留了每个工站自己的接单和复位语义：
 
-- Robot：任务写入完成 -> 任务完成（返回任务号），并管理允许写入。
-- S04：六个磁搅位参数写入完成 -> 加工完成。
-- S06：加液参数写入完成 -> 加工完成。
-- S07/S08/S09：参数写入完成 -> 工艺完成（返回工艺选择值）。
-- S05：启动时提供拍照完成和 OK 结果。
+* Robot：支持任务 7/8/11/12/13/15/16，并同步物料在位传感器；
+* S04：支持 1-6 号磁搅位，参数标志和工艺号均复位后才重新允许加工；
+* S06：参数标志复位即可重新允许加工，工艺号可以保留；
+* S07/S08：返回工艺号，S08 还会等待瓶盖暂存位复位；
+* S09：用持续保留的工艺号接单，避免漏掉约 0.1 秒的参数完成脉冲。
 
 节点优先按实机 NodeId ``ns=4;s=上位机通讯|<变量名>`` 直连；直连失败时
 递归扫描 BrowseName，因此也能连接由本仓库或 Uni-LabOS 测试工具创建的服务器。
@@ -23,7 +24,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Literal, Optional
 
 from opcua import Client, ua
 
@@ -32,116 +33,221 @@ from common import load_yaml, setup_logging
 
 log = setup_logging("SZLab-Handshake")
 
+ROBOT_HOME = "Robot_Home"
+ROBOT_WRITE_ALLOWED = "Robot_任务允许写入"
+ROBOT_WRITE_DONE = "Robot_任务写入完成"
+ROBOT_TASK_NUMBER = "任务号"
+ROBOT_TASK_COMPLETE = "Robot_任务完成"
+S04_ROBOT_POSITION = "S04取放料编号"
 
-@dataclass(frozen=True)
-class HandshakeRule:
-    key: str
-    trigger: str
-    completion: str
-    selector: str
-    result_kind: str  # bool / selector / robot
-    group: str
-    ready_node: Optional[str] = None
+S05_DONE = "S05加工完成"
+S05_RESULT = "S05拍照结果"
+
+S06_READY = "S06准备信号"
+S06_ALLOW = "S06允许加工"
+S06_PROCESS = "S06工艺选择"
+S06_PARAMS_WRITTEN = "S06参数写入完成"
+S06_DONE = "S06加工完成"
+S06_BEAKER_SENSOR = "传感器状态_上位机[3].NO[1]"
+S06_STORAGE_BOTTLE_SENSOR = {
+    1: "传感器状态_上位机[4].NO[12]",
+    2: "传感器状态_上位机[5].NO[1]",
+}
+
+S071_ROBOT_POSITION = "S071取放料编号"
+S071_SENSOR_BY_SLOT = {
+    slot: f"传感器状态_上位机[3].NO[{slot + 7}]"
+    for slot in range(1, 7)
+}
+S072_SENSOR_BY_POSITION = {
+    1: "传感器状态_上位机[3].NO[14]",
+    2: "传感器状态_上位机[3].NO[15]",
+}
+
+S07_HOME = "S07原点信号"
+S07_ALLOW = "S07允许加工"
+S07_PROCESS = "S07工艺选择"
+S07_PARAMS_WRITTEN = "S07参数写入完成"
+S07_DONE = "S07工艺完成"
+S07_PROCESS_LABELS = {
+    1: "粉罐扫码盘点",
+    2: "替换粉罐旋转到进料位",
+    3: "注粉",
+}
+
+S08_HOME = "S08原点信号"
+S08_ALLOW = "S08允许加工"
+S08_PROCESS = "S08工艺选择"
+S08_PARAMS_WRITTEN = "S08参数写入完成"
+S08_DONE = "S08工艺完成"
+S08_CAP_STORAGE_SLOT = "S082瓶盖暂存位"
+S08_STATION_STATUS = "工站状态[7]"
+S08_PROCESS_LABELS = {
+    1: "500 mL 样品瓶开盖",
+    2: "500 mL 样品瓶关盖",
+    3: "250 mL 样品瓶开盖",
+    4: "250 mL 样品瓶关盖",
+    5: "100 mL 液体瓶开盖",
+    6: "100 mL 液体瓶关盖",
+}
+
+S09_PROCESS = "S09工艺选择"
+S09_PARAMS_WRITTEN = "S09参数写入完成"
+S09_DONE = "S09工艺完成"
+S09_ALLOW = "S09允许加工"
+S09_STATION_STATUS = "工站状态[8]"
+S09_PROCESS_LABELS = {
+    1: "去安全位1",
+    2: "去安全位2",
+    3: "去安全位3",
+    4: "去安全位4",
+    5: "取 TIP",
+    6: "放 TIP",
+    7: "液体瓶取液",
+    8: "烧杯放液",
+    9: "测密度抽液",
+    10: "测密度排液",
+}
+
+SUPPORTED_ACTIONS = (
+    "szlab_mixer_robot.submit_place_to_s04",
+    "szlab_mixer_stirrer.run_stirring",
+    "szlab_mixer_robot.submit_pick_from_s04",
+    "szlab_mixer_photoshotting.take_photo",
+    "szlab_mixer_pump.run_solvent_addition",
+    "szlab_mixer_robot.submit_place_to_s06",
+    "szlab_mixer_robot.submit_pick_from_s06",
+    "szlab_mixer_pipetting_station.prepare_liquid_station",
+    "szlab_mixer_pipetting_station.bind_sample_to_station",
+    "szlab_mixer_pipetting_station.add_liquid",
+    "szlab_mixer_pipetting_station.release_station",
+    "szlab_mixer_robot.submit_place_to_s071",
+    "szlab_mixer_robot.submit_place_to_s072",
+    "szlab_mixer_robot.submit_pick_from_s072",
+    "szlab_s07_solid_addition.scan_powder_cartridges",
+    "szlab_s07_solid_addition.rotate_powder_cartridge_to_feed",
+    "szlab_s07_solid_addition.dose_powder",
+    "szlab_s08_cap_station.process_cap_with_sample_parts",
+    "szlab_poly_plc.get_stack_status",
+)
+
+ROBOT_ACTION_BY_TASK = {
+    7: SUPPORTED_ACTIONS[0],
+    8: SUPPORTED_ACTIONS[2],
+    11: SUPPORTED_ACTIONS[5],
+    12: SUPPORTED_ACTIONS[6],
+    13: SUPPORTED_ACTIONS[11],
+    15: SUPPORTED_ACTIONS[12],
+    16: SUPPORTED_ACTIONS[13],
+}
+S07_ACTION_BY_PROCESS = {
+    1: SUPPORTED_ACTIONS[14],
+    2: SUPPORTED_ACTIONS[15],
+    3: SUPPORTED_ACTIONS[16],
+}
+
+
+def s04_sensor(position: int) -> str:
+    position = int(position)
+    if position not in range(1, 7):
+        raise ValueError("S04 position 必须在 1-6 范围内")
+    return f"传感器状态_上位机[2].NO[{position + 9}]"
+
+
+def s04_allow(position: int) -> str:
+    return f"S04{int(position)}允许加工"
+
+
+def s04_process(position: int) -> str:
+    return f"S04{int(position)}磁搅工艺选择"
+
+
+def s04_params_written(position: int) -> str:
+    return f"S04{int(position)}参数写入完成"
+
+
+def s04_done(position: int) -> str:
+    return f"S04{int(position)}加工完成"
+
+
+def s09_remaining_volume(bottle: int) -> str:
+    return f"S09液体瓶{int(bottle)}剩余液量"
+
+
+def s08_cap_cache(slot: int, index: int) -> str:
+    return f"S082_{int(slot)}数据缓存[{int(index)}]"
 
 
 @dataclass
-class RuleState:
-    previous_trigger: Any = False
-    active: bool = False
-    completed: bool = False
-    due_at: Optional[float] = None
+class CycleState:
+    phase: Literal["idle", "executing", "await_reset"] = "idle"
+    due_at: float = 0.0
+    process: int = 0
+    position: int = 0
+    sensor: str = ""
 
 
-def build_rules() -> list[HandshakeRule]:
-    rules = [
-        HandshakeRule(
-            key="robot",
-            trigger="Robot_任务写入完成",
-            completion="Robot_任务完成",
-            selector="任务号",
-            result_kind="robot",
-            group="robot",
-            ready_node="Robot_任务允许写入",
-        )
-    ]
-    rules.extend(
-        HandshakeRule(
-            key=f"s04:{position}",
-            trigger=f"S04{position}参数写入完成",
-            completion=f"S04{position}加工完成",
-            selector=f"S04{position}磁搅工艺选择",
-            result_kind="bool",
-            group="s04",
-        )
-        for position in range(1, 7)
-    )
-    rules.extend(
-        [
-            HandshakeRule(
-                key="s06",
-                trigger="S06参数写入完成",
-                completion="S06加工完成",
-                selector="S06工艺选择",
-                result_kind="bool",
-                group="s06",
-            ),
-            HandshakeRule(
-                key="s07",
-                trigger="S07参数写入完成",
-                completion="S07工艺完成",
-                selector="S07工艺选择",
-                result_kind="selector",
-                group="s07",
-            ),
-            HandshakeRule(
-                key="s08",
-                trigger="S08参数写入完成",
-                completion="S08工艺完成",
-                selector="S08工艺选择",
-                result_kind="selector",
-                group="s08",
-            ),
-            HandshakeRule(
-                key="s09",
-                trigger="S09参数写入完成",
-                completion="S09工艺完成",
-                selector="S09工艺选择",
-                result_kind="selector",
-                group="s09",
-            ),
-        ]
-    )
-    return rules
+@dataclass(frozen=True)
+class HandshakeEvent:
+    action: str
+    phase: Literal["accepted", "completed", "reset"]
+    details: Dict[str, Any]
 
 
-def default_initial_values() -> Dict[str, Any]:
+def default_initial_values(
+    *,
+    pump: int = 1,
+    s06_robot_workflow: bool = False,
+    s09_pipetting_workflow: bool = True,
+    s09_remaining_volume_ml: float = 100.0,
+) -> Dict[str, Any]:
+    """返回仿真器拥有的 PLC 输出初值，不覆盖 PC 侧输入参数。"""
+    if int(pump) not in (1, 2, 3):
+        raise ValueError("pump 必须是 1、2 或 3")
+    if s09_pipetting_workflow and float(s09_remaining_volume_ml) <= 0:
+        raise ValueError("S09 初始液体余量必须大于 0 mL")
+
     values: Dict[str, Any] = {
-        "Robot_Home": True,
-        "Robot_任务允许写入": True,
-        "Robot_任务完成": 0,
-        "S05准备信号": True,
-        "S05加工完成": True,
-        "S05拍照结果": 1,
-        "S06准备信号": True,
-        "S06允许加工": True,
-        "S06加工完成": False,
-        "S07原点信号": True,
-        "S07允许加工": True,
-        "S07工艺完成": 0,
-        "S08原点信号": True,
-        "S08允许加工": True,
-        "S08工艺完成": 0,
-        "S09允许加工": True,
-        "S09天平读数稳定": True,
-        "S09天平读数": 12.34,
-        "S09工艺完成": 0,
+        ROBOT_HOME: True,
+        ROBOT_WRITE_ALLOWED: True,
+        ROBOT_WRITE_DONE: False,
+        ROBOT_TASK_COMPLETE: 0,
+        S05_DONE: True,
+        S05_RESULT: 1,
+        S06_READY: True,
+        S06_ALLOW: True,
+        S06_DONE: False,
+        S06_BEAKER_SENSOR: not bool(s06_robot_workflow),
+        S07_HOME: True,
+        S07_ALLOW: True,
+        S07_DONE: 0,
+        S08_HOME: True,
+        S08_ALLOW: True,
+        S08_DONE: 0,
+        S08_STATION_STATUS: 2,
+        S072_SENSOR_BY_POSITION[1]: False,
     }
     for position in range(1, 7):
-        values[f"S04{position}准备信号"] = True
-        values[f"S04{position}允许加工"] = True
-        values[f"S04{position}加工完成"] = False
-    for position in range(1, 5):
-        values[f"S09原点信号_{position}"] = True
+        values[s04_sensor(position)] = False
+        values[s04_allow(position)] = True
+        values[s04_done(position)] = False
+        values[S071_SENSOR_BY_SLOT[position]] = False
+    for bottle in ((1, 2) if int(pump) == 3 else (int(pump),)):
+        values[S06_STORAGE_BOTTLE_SENSOR[bottle]] = True
+    for index in range(30):
+        values[s08_cap_cache(1, index)] = 0
+    if s09_pipetting_workflow:
+        values.update(
+            {
+                S09_STATION_STATUS: 2,
+                S09_ALLOW: True,
+                S09_DONE: 0,
+                **{
+                    s09_remaining_volume(bottle): float(s09_remaining_volume_ml)
+                    for bottle in range(1, 6)
+                },
+            }
+        )
     return values
 
 
@@ -158,6 +264,10 @@ class SzlabHandshakeSimulator:
         initial_values: Optional[Dict[str, Any]] = None,
         strict: bool = False,
         client: Optional[Client] = None,
+        pump: int = 1,
+        s06_robot_workflow: bool = False,
+        s09_pipetting_workflow: bool = True,
+        s09_remaining_volume_ml: float = 100.0,
     ) -> None:
         self.url = url
         self.namespace_index = int(namespace_index)
@@ -165,23 +275,83 @@ class SzlabHandshakeSimulator:
         self.delay_ms = max(0, int(delay_ms))
         self.poll_ms = max(5, int(poll_ms))
         self.delays = {str(key): int(value) for key, value in (delays or {}).items()}
-        self.initial_values = {**default_initial_values(), **dict(initial_values or {})}
-        self.strict = strict
+        self.strict = bool(strict)
+        self.pump = int(pump)
+        self.s06_robot_workflow = bool(s06_robot_workflow)
+        self.s09_pipetting_workflow = bool(s09_pipetting_workflow)
+        self.s09_remaining_volume_ml = float(s09_remaining_volume_ml)
+        defaults = default_initial_values(
+            pump=self.pump,
+            s06_robot_workflow=self.s06_robot_workflow,
+            s09_pipetting_workflow=self.s09_pipetting_workflow,
+            s09_remaining_volume_ml=self.s09_remaining_volume_ml,
+        )
+        self.initial_values = {**defaults, **dict(initial_values or {})}
         self.client = client or Client(url, timeout=4)
         self.nodes: Dict[str, Any] = {}
-        self.rules = build_rules()
-        self.enabled_rules: list[HandshakeRule] = []
-        self.states: Dict[str, RuleState] = {}
+        self.enabled_groups: set[str] = set()
+        self.enabled_s04_positions: set[int] = set()
+        self.robot = CycleState()
+        self.s04_cycles = {position: CycleState(position=position) for position in range(1, 7)}
+        self.s06 = CycleState()
+        self.s07 = CycleState()
+        self.s08 = CycleState()
+        self.s09 = CycleState()
+        self._s071_loaded_sensor = ""
+        self._warned_inputs: set[tuple[str, int]] = set()
+        self.completed_actions = 0
         self._stop = threading.Event()
         self._connected = False
 
     @property
     def required_names(self) -> set[str]:
         names = set(self.initial_values)
-        for rule in self.rules:
-            names.update((rule.trigger, rule.completion, rule.selector))
-            if rule.ready_node:
-                names.add(rule.ready_node)
+        names.update(
+            {
+                ROBOT_HOME,
+                ROBOT_WRITE_ALLOWED,
+                ROBOT_WRITE_DONE,
+                ROBOT_TASK_NUMBER,
+                ROBOT_TASK_COMPLETE,
+                S04_ROBOT_POSITION,
+                S06_READY,
+                S06_ALLOW,
+                S06_PROCESS,
+                S06_PARAMS_WRITTEN,
+                S06_DONE,
+                S06_BEAKER_SENSOR,
+                S071_ROBOT_POSITION,
+                *S071_SENSOR_BY_SLOT.values(),
+                *S072_SENSOR_BY_POSITION.values(),
+                S07_HOME,
+                S07_ALLOW,
+                S07_PROCESS,
+                S07_PARAMS_WRITTEN,
+                S07_DONE,
+                S08_HOME,
+                S08_ALLOW,
+                S08_PROCESS,
+                S08_PARAMS_WRITTEN,
+                S08_DONE,
+                S08_CAP_STORAGE_SLOT,
+                S08_STATION_STATUS,
+                S09_PROCESS,
+                S09_PARAMS_WRITTEN,
+                S09_DONE,
+                S09_ALLOW,
+                S09_STATION_STATUS,
+            }
+        )
+        for position in range(1, 7):
+            names.update(
+                {
+                    s04_sensor(position),
+                    s04_allow(position),
+                    s04_process(position),
+                    s04_params_written(position),
+                    s04_done(position),
+                }
+            )
         return names
 
     def connect(self, timeout: float = 15.0) -> None:
@@ -199,12 +369,12 @@ class SzlabHandshakeSimulator:
             raise ConnectionError(f"无法连接到 {self.url}: {last_error}")
 
         self._resolve_nodes()
-        self._prepare_rules()
+        self._prepare_capabilities()
         log.info(
-            "已连接 %s，解析节点 %d 个，启用握手 %d 组",
+            "已连接 %s，解析节点 %d 个，启用工站：%s",
             self.url,
             len(self.nodes),
-            len(self.enabled_rules),
+            ", ".join(sorted(self.enabled_groups)) or "无",
         )
 
     def disconnect(self) -> None:
@@ -251,40 +421,102 @@ class SzlabHandshakeSimulator:
         log.info("BrowseName 回退扫描完成：visited=%d indexed=%d", visited, len(index))
         return index
 
-    def _prepare_rules(self) -> None:
-        self.enabled_rules.clear()
-        missing_by_rule: Dict[str, list[str]] = {}
-        for rule in self.rules:
-            needed = [rule.trigger, rule.completion, rule.selector]
-            if rule.ready_node:
-                needed.append(rule.ready_node)
+    def _prepare_capabilities(self) -> None:
+        self.enabled_groups.clear()
+        self.enabled_s04_positions.clear()
+        groups: Dict[str, Iterable[str]] = {
+            "robot": (
+                ROBOT_HOME,
+                ROBOT_WRITE_ALLOWED,
+                ROBOT_WRITE_DONE,
+                ROBOT_TASK_NUMBER,
+                ROBOT_TASK_COMPLETE,
+            ),
+            "s06": (S06_ALLOW, S06_PROCESS, S06_PARAMS_WRITTEN, S06_DONE),
+            "s07": (S07_ALLOW, S07_PROCESS, S07_PARAMS_WRITTEN, S07_DONE),
+            "s08": (
+                S08_ALLOW,
+                S08_PROCESS,
+                S08_PARAMS_WRITTEN,
+                S08_DONE,
+                S08_CAP_STORAGE_SLOT,
+            ),
+            "s09": (S09_ALLOW, S09_PROCESS, S09_PARAMS_WRITTEN, S09_DONE),
+        }
+        missing_messages: list[str] = []
+        for group, needed in groups.items():
+            if group == "s09" and not self.s09_pipetting_workflow:
+                continue
             missing = [name for name in needed if name not in self.nodes]
             if missing:
-                missing_by_rule[rule.key] = missing
-                continue
-            self.enabled_rules.append(rule)
-            self.states[rule.key] = RuleState(
-                previous_trigger=bool(self._read(rule.trigger))
-            )
+                missing_messages.append(f"{group}: {', '.join(missing)}")
+            else:
+                self.enabled_groups.add(group)
 
-        if missing_by_rule:
-            details = "; ".join(
-                f"{key}: {', '.join(names)}" for key, names in missing_by_rule.items()
+        for position in range(1, 7):
+            needed = (
+                s04_allow(position),
+                s04_process(position),
+                s04_params_written(position),
+                s04_done(position),
             )
-            if self.strict:
-                raise RuntimeError(f"SZLab 握手节点不完整：{details}")
-            log.warning("部分握手因 CSV/Server 缺少节点而跳过：%s", details)
+            missing = [name for name in needed if name not in self.nodes]
+            if missing:
+                missing_messages.append(f"s04:{position}: {', '.join(missing)}")
+            else:
+                self.enabled_s04_positions.add(position)
+        if self.enabled_s04_positions:
+            self.enabled_groups.add("s04")
+
+        if self.strict:
+            missing_all = sorted(self.required_names.difference(self.nodes))
+            if missing_all:
+                raise RuntimeError("SZLab 握手节点不完整：" + ", ".join(missing_all))
+        elif missing_messages:
+            log.warning("部分握手因 CSV/Server 缺少节点而跳过：%s", "; ".join(missing_messages))
 
     def initialize(self) -> None:
         written = 0
         for name, value in self.initial_values.items():
-            if name not in self.nodes:
-                continue
-            self._write(name, value)
-            written += 1
-        for rule in self.enabled_rules:
-            self.states[rule.key].previous_trigger = bool(self._read(rule.trigger))
+            if name in self.nodes:
+                self._write(name, value)
+                written += 1
+        self._reset_internal_state()
         log.info("PLC 侧握手初始状态已写入：%d 个节点", written)
+
+    def cleanup(self) -> None:
+        """安全释放本仿真器拥有的输出，不改写 PC 侧任务号和工艺参数。"""
+        cleaned = 0
+        for name, value in self._cleanup_values().items():
+            if name in self.nodes:
+                self._write(name, value)
+                cleaned += 1
+        self._reset_internal_state()
+        log.info("PLC 侧握手输出已清理：%d 个节点", cleaned)
+
+    def _cleanup_values(self) -> Dict[str, Any]:
+        owned_values = default_initial_values(
+            pump=self.pump,
+            s06_robot_workflow=self.s06_robot_workflow,
+            s09_pipetting_workflow=self.s09_pipetting_workflow,
+            s09_remaining_volume_ml=self.s09_remaining_volume_ml,
+        )
+        # 启动时将 write_done 置为基线 False，但退出时它属于 PC 输入，不能覆盖。
+        owned_values.pop(ROBOT_WRITE_DONE, None)
+        return {
+            name: (False if isinstance(value, bool) else 0)
+            for name, value in owned_values.items()
+        }
+
+    def _reset_internal_state(self) -> None:
+        self.robot = CycleState()
+        self.s04_cycles = {position: CycleState(position=position) for position in range(1, 7)}
+        self.s06 = CycleState()
+        self.s07 = CycleState()
+        self.s08 = CycleState()
+        self.s09 = CycleState()
+        self._s071_loaded_sensor = ""
+        self._warned_inputs.clear()
 
     def run_forever(self, initialize: bool = True) -> None:
         if initialize:
@@ -299,69 +531,383 @@ class SzlabHandshakeSimulator:
     def stop(self) -> None:
         self._stop.set()
 
-    def tick(self, now: Optional[float] = None) -> None:
-        now = time.monotonic() if now is None else now
-        for rule in self.enabled_rules:
-            self._tick_rule(rule, self.states[rule.key], now)
+    def tick(self, now: Optional[float] = None) -> list[HandshakeEvent]:
+        now = time.monotonic() if now is None else float(now)
+        events: list[HandshakeEvent] = []
+        if "robot" in self.enabled_groups:
+            events.extend(self._tick_robot(now))
+        for position in sorted(self.enabled_s04_positions):
+            events.extend(self._tick_s04(position, now))
+        if "s06" in self.enabled_groups:
+            events.extend(self._tick_boolean_station("s06", self.s06, now))
+        if "s07" in self.enabled_groups:
+            events.extend(self._tick_s07(now))
+        if "s08" in self.enabled_groups:
+            events.extend(self._tick_s08(now))
+        if "s09" in self.enabled_groups:
+            events.extend(self._tick_s09(now))
+        self.completed_actions += sum(event.phase == "completed" for event in events)
+        for event in events:
+            log.info("握手 %s %s：%s", event.action, event.phase, event.details)
+        return events
 
-    def _tick_rule(self, rule: HandshakeRule, state: RuleState, now: float) -> None:
-        trigger = bool(self._read(rule.trigger))
-        selector = self._read(rule.selector)
-
-        if trigger and not bool(state.previous_trigger) and not state.active:
-            if not bool(selector):
-                log.warning("忽略 %s 触发：%s 仍为 %r", rule.key, rule.selector, selector)
-            else:
-                state.active = True
-                state.completed = False
-                state.due_at = now + self._rule_delay_ms(rule) / 1000.0
-                self._write(rule.completion, self._neutral_value(rule))
-                if rule.ready_node:
-                    self._write(rule.ready_node, False)
-                log.info(
-                    "握手触发 %s：%s=%r，预计 %dms 后完成",
-                    rule.key,
-                    rule.selector,
-                    selector,
-                    self._rule_delay_ms(rule),
+    def _tick_robot(self, now: float) -> list[HandshakeEvent]:
+        cycle = self.robot
+        events: list[HandshakeEvent] = []
+        if cycle.phase == "idle":
+            write_done = bool(self._read(ROBOT_WRITE_DONE))
+            task = int(self._read(ROBOT_TASK_NUMBER) or 0)
+            if write_done and task in ROBOT_ACTION_BY_TASK:
+                target = self._robot_target(task)
+                if target is None:
+                    self._warn_unsupported_input("robot", task)
+                    return events
+                position, sensor = target
+                self._write(ROBOT_WRITE_ALLOWED, False)
+                self._write(ROBOT_HOME, False)
+                self._write(ROBOT_TASK_COMPLETE, 0)
+                cycle.phase = "executing"
+                cycle.process = task
+                cycle.position = position
+                cycle.sensor = sensor
+                cycle.due_at = now + self._delay_seconds("robot")
+                events.append(
+                    HandshakeEvent(
+                        ROBOT_ACTION_BY_TASK[task],
+                        "accepted",
+                        {
+                            "task_number": task,
+                            **({"position": position} if position else {}),
+                            **({"sensor": sensor} if sensor else {}),
+                        },
+                    )
                 )
+        elif cycle.phase == "executing" and now >= cycle.due_at:
+            occupied = cycle.process in (7, 11, 13, 15)
+            if cycle.sensor:
+                self._write(cycle.sensor, occupied)
+            rearmed_sensor = ""
+            if cycle.process == 13:
+                self._s071_loaded_sensor = cycle.sensor
+            elif cycle.process == 16 and self._s071_loaded_sensor:
+                rearmed_sensor = self._s071_loaded_sensor
+                self._write(rearmed_sensor, False)
+                self._s071_loaded_sensor = ""
+            self._write(ROBOT_HOME, True)
+            self._write(ROBOT_TASK_COMPLETE, cycle.process)
+            cycle.phase = "await_reset"
+            events.append(
+                HandshakeEvent(
+                    ROBOT_ACTION_BY_TASK[cycle.process],
+                    "completed",
+                    {
+                        "task_number": cycle.process,
+                        "occupied": occupied,
+                        **({"position": cycle.position} if cycle.position else {}),
+                        **({"sensor": cycle.sensor} if cycle.sensor else {}),
+                        **({"rearmed_sensor": rearmed_sensor} if rearmed_sensor else {}),
+                    },
+                )
+            )
+        elif cycle.phase == "await_reset":
+            write_done = bool(self._read(ROBOT_WRITE_DONE))
+            observed_task = int(self._read(ROBOT_TASK_NUMBER) or 0)
+            if not write_done:
+                self._write(ROBOT_TASK_COMPLETE, 0)
+                self._write(ROBOT_WRITE_ALLOWED, True)
+                self._write(ROBOT_HOME, True)
+                events.append(
+                    HandshakeEvent(
+                        ROBOT_ACTION_BY_TASK[cycle.process],
+                        "reset",
+                        {
+                            "task_number": cycle.process,
+                            "observed_task_number": observed_task,
+                        },
+                    )
+                )
+                self.robot = CycleState()
+        return events
 
-        if state.active and not state.completed and state.due_at is not None and now >= state.due_at:
-            selector = self._read(rule.selector)
-            result = self._result_value(rule, selector)
-            self._write(rule.completion, result)
-            state.completed = True
-            log.info("握手完成 %s：%s=%r", rule.key, rule.completion, result)
+    def _robot_target(self, task: int) -> Optional[tuple[int, str]]:
+        position = 0
+        sensor = ""
+        if task in (7, 8):
+            if S04_ROBOT_POSITION not in self.nodes:
+                return None
+            position = int(self._read(S04_ROBOT_POSITION) or 0)
+            if position not in range(1, 7):
+                return None
+            sensor = s04_sensor(position)
+        elif task in (11, 12):
+            sensor = S06_BEAKER_SENSOR
+        elif task == 13:
+            if S071_ROBOT_POSITION not in self.nodes:
+                return None
+            position = int(self._read(S071_ROBOT_POSITION) or 0)
+            if position not in S071_SENSOR_BY_SLOT:
+                return None
+            sensor = S071_SENSOR_BY_SLOT[position]
+        elif task in (15, 16):
+            position = 1
+            sensor = S072_SENSOR_BY_POSITION[position]
+        if sensor and sensor not in self.nodes:
+            return None
+        return position, sensor
 
-        # S09 的 trigger 是短脉冲，不能在下降沿立刻清完成；等上位机读取完成并
-        # 把工艺选择/任务号复位为 0 后，再清 PLC 侧完成信号。
-        if state.active and not trigger and not bool(selector):
-            self._write(rule.completion, self._neutral_value(rule))
-            if rule.ready_node:
-                self._write(rule.ready_node, True)
-            state.active = False
-            state.completed = False
-            state.due_at = None
-            log.info("握手回环 %s：完成信号已复位", rule.key)
+    def _tick_s04(self, position: int, now: float) -> list[HandshakeEvent]:
+        cycle = self.s04_cycles[position]
+        events: list[HandshakeEvent] = []
+        params_written = bool(self._read(s04_params_written(position)))
+        process = int(self._read(s04_process(position)) or 0)
+        if cycle.phase == "idle" and params_written and process in (1, 2, 3):
+            self._write(s04_allow(position), False)
+            self._write(s04_done(position), False)
+            cycle.phase = "executing"
+            cycle.process = process
+            cycle.due_at = now + self._delay_seconds("s04", f"s04:{position}")
+            events.append(
+                HandshakeEvent(
+                    SUPPORTED_ACTIONS[1],
+                    "accepted",
+                    {"process": process, "position": position},
+                )
+            )
+        elif cycle.phase == "executing" and now >= cycle.due_at:
+            self._write(s04_done(position), True)
+            cycle.phase = "await_reset"
+            events.append(
+                HandshakeEvent(
+                    SUPPORTED_ACTIONS[1],
+                    "completed",
+                    {"process": cycle.process, "position": position},
+                )
+            )
+        elif cycle.phase == "await_reset" and not params_written and process == 0:
+            self._write(s04_done(position), False)
+            self._write(s04_allow(position), True)
+            events.append(
+                HandshakeEvent(
+                    SUPPORTED_ACTIONS[1],
+                    "reset",
+                    {"process": cycle.process, "position": position},
+                )
+            )
+            self.s04_cycles[position] = CycleState(position=position)
+        return events
 
-        state.previous_trigger = trigger
+    def _tick_boolean_station(
+        self,
+        group: str,
+        cycle: CycleState,
+        now: float,
+    ) -> list[HandshakeEvent]:
+        if group != "s06":
+            raise ValueError(f"未知布尔握手工站：{group}")
+        events: list[HandshakeEvent] = []
+        params_written = bool(self._read(S06_PARAMS_WRITTEN))
+        process = int(self._read(S06_PROCESS) or 0)
+        if cycle.phase == "idle" and params_written and process in (1, 2, 3):
+            self._write(S06_ALLOW, False)
+            self._write(S06_DONE, False)
+            cycle.phase = "executing"
+            cycle.process = process
+            cycle.due_at = now + self._delay_seconds("s06")
+            events.append(
+                HandshakeEvent(
+                    SUPPORTED_ACTIONS[4],
+                    "accepted",
+                    {"process": process},
+                )
+            )
+        elif cycle.phase == "executing" and now >= cycle.due_at:
+            self._write(S06_DONE, True)
+            cycle.phase = "await_reset"
+            events.append(
+                HandshakeEvent(
+                    SUPPORTED_ACTIONS[4],
+                    "completed",
+                    {"process": cycle.process},
+                )
+            )
+        elif cycle.phase == "await_reset" and not params_written:
+            self._write(S06_DONE, False)
+            self._write(S06_ALLOW, True)
+            events.append(
+                HandshakeEvent(
+                    SUPPORTED_ACTIONS[4],
+                    "reset",
+                    {"process": cycle.process, "observed_process": process},
+                )
+            )
+            self.s06 = CycleState()
+        return events
 
-    def _rule_delay_ms(self, rule: HandshakeRule) -> int:
-        return max(
-            0,
-            int(self.delays.get(rule.key, self.delays.get(rule.group, self.delay_ms))),
-        )
+    def _tick_s07(self, now: float) -> list[HandshakeEvent]:
+        cycle = self.s07
+        events: list[HandshakeEvent] = []
+        process = int(self._read(S07_PROCESS) or 0)
+        params_written = bool(self._read(S07_PARAMS_WRITTEN))
+        if cycle.phase == "idle" and params_written and process in S07_PROCESS_LABELS:
+            self._write(S07_ALLOW, False)
+            self._write(S07_DONE, 0)
+            cycle.phase = "executing"
+            cycle.process = process
+            cycle.due_at = now + self._delay_seconds("s07")
+            events.append(
+                HandshakeEvent(
+                    S07_ACTION_BY_PROCESS[process],
+                    "accepted",
+                    {"process": process, "process_label": S07_PROCESS_LABELS[process]},
+                )
+            )
+        elif cycle.phase == "executing" and now >= cycle.due_at:
+            self._write(S07_DONE, cycle.process)
+            cycle.phase = "await_reset"
+            events.append(
+                HandshakeEvent(
+                    S07_ACTION_BY_PROCESS[cycle.process],
+                    "completed",
+                    {
+                        "process": cycle.process,
+                        "process_label": S07_PROCESS_LABELS[cycle.process],
+                    },
+                )
+            )
+        elif cycle.phase == "await_reset" and not params_written and process == 0:
+            self._write(S07_DONE, 0)
+            self._write(S07_ALLOW, True)
+            events.append(
+                HandshakeEvent(
+                    S07_ACTION_BY_PROCESS[cycle.process],
+                    "reset",
+                    {
+                        "process": cycle.process,
+                        "process_label": S07_PROCESS_LABELS[cycle.process],
+                    },
+                )
+            )
+            self.s07 = CycleState()
+        return events
 
-    @staticmethod
-    def _neutral_value(rule: HandshakeRule) -> Any:
-        return False if rule.result_kind == "bool" else 0
+    def _tick_s08(self, now: float) -> list[HandshakeEvent]:
+        cycle = self.s08
+        events: list[HandshakeEvent] = []
+        process = int(self._read(S08_PROCESS) or 0)
+        params_written = bool(self._read(S08_PARAMS_WRITTEN))
+        cap_storage_slot = int(self._read(S08_CAP_STORAGE_SLOT) or 0)
+        if cycle.phase == "idle" and params_written and process in S08_PROCESS_LABELS:
+            self._write(S08_ALLOW, False)
+            self._write(S08_DONE, 0)
+            cycle.phase = "executing"
+            cycle.process = process
+            cycle.position = cap_storage_slot
+            cycle.due_at = now + self._delay_seconds("s08")
+            events.append(
+                HandshakeEvent(
+                    SUPPORTED_ACTIONS[17],
+                    "accepted",
+                    {
+                        "process": process,
+                        "process_label": S08_PROCESS_LABELS[process],
+                        "cap_storage_slot": cap_storage_slot,
+                    },
+                )
+            )
+        elif cycle.phase == "executing" and now >= cycle.due_at:
+            self._write(S08_DONE, cycle.process)
+            cycle.phase = "await_reset"
+            events.append(
+                HandshakeEvent(
+                    SUPPORTED_ACTIONS[17],
+                    "completed",
+                    {
+                        "process": cycle.process,
+                        "process_label": S08_PROCESS_LABELS[cycle.process],
+                        "cap_storage_slot": cycle.position,
+                    },
+                )
+            )
+        elif (
+            cycle.phase == "await_reset"
+            and not params_written
+            and process == 0
+            and cap_storage_slot == 0
+        ):
+            self._write(S08_DONE, 0)
+            self._write(S08_ALLOW, True)
+            events.append(
+                HandshakeEvent(
+                    SUPPORTED_ACTIONS[17],
+                    "reset",
+                    {
+                        "process": cycle.process,
+                        "process_label": S08_PROCESS_LABELS[cycle.process],
+                        "cap_storage_slot": cycle.position,
+                    },
+                )
+            )
+            self.s08 = CycleState()
+        return events
 
-    @staticmethod
-    def _result_value(rule: HandshakeRule, selector: Any) -> Any:
-        if rule.result_kind == "bool":
-            return True
-        value = int(selector or 0)
-        return value if value != 0 else 1
+    def _tick_s09(self, now: float) -> list[HandshakeEvent]:
+        cycle = self.s09
+        events: list[HandshakeEvent] = []
+        process = int(self._read(S09_PROCESS) or 0)
+        params_written = bool(self._read(S09_PARAMS_WRITTEN))
+        if cycle.phase == "idle" and process in S09_PROCESS_LABELS:
+            self._write(S09_ALLOW, False)
+            self._write(S09_DONE, 0)
+            cycle.phase = "executing"
+            cycle.process = process
+            cycle.due_at = now + self._delay_seconds("s09")
+            events.append(
+                HandshakeEvent(
+                    SUPPORTED_ACTIONS[9],
+                    "accepted",
+                    {
+                        "process": process,
+                        "process_label": S09_PROCESS_LABELS[process],
+                        "params_written": params_written,
+                    },
+                )
+            )
+        elif cycle.phase == "executing" and now >= cycle.due_at:
+            self._write(S09_DONE, cycle.process)
+            cycle.phase = "await_reset"
+            events.append(
+                HandshakeEvent(
+                    SUPPORTED_ACTIONS[9],
+                    "completed",
+                    {
+                        "process": cycle.process,
+                        "process_label": S09_PROCESS_LABELS[cycle.process],
+                    },
+                )
+            )
+        elif cycle.phase == "await_reset" and process != cycle.process:
+            self._write(S09_DONE, 0)
+            self._write(S09_ALLOW, True)
+            events.append(
+                HandshakeEvent(
+                    SUPPORTED_ACTIONS[9],
+                    "reset",
+                    {"process": cycle.process, "observed_process": process},
+                )
+            )
+            self.s09 = CycleState()
+        return events
+
+    def _delay_seconds(self, group: str, key: Optional[str] = None) -> float:
+        delay = self.delays.get(key or "", self.delays.get(group, self.delay_ms))
+        return max(0, int(delay)) / 1000.0
+
+    def _warn_unsupported_input(self, group: str, value: int) -> None:
+        warning = (group, value)
+        if warning in self._warned_inputs:
+            return
+        self._warned_inputs.add(warning)
+        log.warning("%s 收到无法执行的值 %s：位置无效或对应传感器节点缺失", group, value)
 
     def _read(self, name: str) -> Any:
         return self.nodes[name].get_value()
@@ -415,9 +961,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--delay-ms", type=int, default=None)
     parser.add_argument("--poll-ms", type=int, default=None)
     parser.add_argument("--connect-timeout", type=float, default=15.0)
-    parser.add_argument("--strict", action="store_true", help="缺少任一握手节点时退出")
+    parser.add_argument("--pump", type=int, choices=(1, 2, 3), default=None)
+    parser.add_argument(
+        "--s06-robot-workflow",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="让 S06 烧杯在位信号由机器人任务 11/12 驱动",
+    )
+    parser.add_argument(
+        "--s09-pipetting-workflow",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="初始化并响应完整 S09 移液工作流",
+    )
+    parser.add_argument("--s09-remaining-volume-ml", type=float, default=None)
+    parser.add_argument("--strict", action="store_true", help="缺少任一协议节点时退出")
     parser.add_argument("--no-initialize", action="store_true", help="不写入 PLC 侧初始状态")
+    parser.add_argument(
+        "--cleanup-on-exit",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="正常退出时清理仿真器拥有的 PLC 输出",
+    )
     return parser.parse_args()
+
+
+def _config_bool(
+    cli_value: Optional[bool],
+    config: Dict[str, Any],
+    key: str,
+    default: bool,
+) -> bool:
+    return bool(config.get(key, default)) if cli_value is None else bool(cli_value)
 
 
 def main() -> int:
@@ -432,6 +1007,30 @@ def main() -> int:
         delays=dict(config.get("delays", {})),
         initial_values=dict(config.get("initial_values", {})),
         strict=args.strict,
+        pump=args.pump if args.pump is not None else int(config.get("pump", 1)),
+        s06_robot_workflow=_config_bool(
+            args.s06_robot_workflow,
+            config,
+            "s06_robot_workflow",
+            False,
+        ),
+        s09_pipetting_workflow=_config_bool(
+            args.s09_pipetting_workflow,
+            config,
+            "s09_pipetting_workflow",
+            True,
+        ),
+        s09_remaining_volume_ml=(
+            args.s09_remaining_volume_ml
+            if args.s09_remaining_volume_ml is not None
+            else float(config.get("s09_remaining_volume_ml", 100.0))
+        ),
+    )
+    cleanup_on_exit = _config_bool(
+        args.cleanup_on_exit,
+        config,
+        "cleanup_on_exit",
+        True,
     )
 
     def _request_stop(signum: int, frame: Any) -> None:
@@ -445,13 +1044,20 @@ def main() -> int:
     except (AttributeError, ValueError):
         pass
 
+    initialized = False
     try:
         simulator.connect(timeout=args.connect_timeout)
-        simulator.run_forever(initialize=not args.no_initialize)
-    except (ConnectionError, RuntimeError) as exc:
+        initialized = not args.no_initialize
+        simulator.run_forever(initialize=initialized)
+    except (ConnectionError, RuntimeError, ValueError) as exc:
         log.error("%s", exc)
         return 2
     finally:
+        if initialized and cleanup_on_exit and simulator._connected:
+            try:
+                simulator.cleanup()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("清理 PLC 侧握手输出失败：%s", exc)
         simulator.disconnect()
     return 0
 

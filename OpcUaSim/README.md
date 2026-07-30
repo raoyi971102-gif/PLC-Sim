@@ -133,13 +133,14 @@ python handshake_agent.py `
 `szlab_handshake_agent.py` 根据 Uni-Lab-OS 的 SZLab 设备驱动契约模拟 PLC
 侧响应，覆盖：
 
-- Robot 任务允许写入、任务完成和回环复位；
-- S04 六个磁搅位置；
+- Robot 任务 `7/8/11/12/13/15/16` 的允许写入、任务完成和回环复位；
+- Robot 在 S04、S06、S071、S072 放取料时对应的物料在位传感器联动；
+- S04 六个磁搅位置（工艺 `1-3`）；
 - S05 拍照完成与 OK 结果；
-- S06 加液；
-- S07 固体加样；
-- S08 开关盖；
-- S09 移液和天平状态。
+- S06 加液（工艺 `1-3`，参数写入标志复位后重新允许加工）；
+- S07 固体加样（工艺 `1-3`）；
+- S08 开关盖（工艺 `1-6`，等待瓶盖暂存位一并复位）；
+- S09 移液（工艺 `1-10`，即使未捕获到短暂的参数完成脉冲也能接单）。
 
 先启动包含 SZLab 节点的 OPC UA Server，再运行：
 
@@ -158,13 +159,21 @@ GUI 的“握手代理”中可将“仿真协议”切换为 `SZLab Poly Studio
 `ns=4;s=上位机通讯|<变量名>`，找不到时按 BrowseName 递归匹配。
 缺失某个工位节点时默认只跳过该工位；命令行增加 `--strict` 可改为立即报错。
 
-延时和 PLC 侧初始值位于 `config/szlab_handshake.yaml`。默认只初始化握手、就绪和
-允许加工信号，不伪造物料在位传感器；测试机器人纯握手时可在 Uni-LabOS 侧设置
-`SKIP_SENSOR_PRECHECK=1`，或在 YAML 的 `initial_values` 中明确加入所需传感器。
+延时、工作流和 PLC 侧初始值位于 `config/szlab_handshake.yaml`：
 
-注意：Uni-Lab-OS 当前 `szlab_poly_studio.json` 指向的旧版
-`szlab_plc_0610.csv` 不包含后续加入的完整 Robot/S04/S06-S09 握手变量。
-仿真 Server 应加载与当前设备驱动一致的节点表或从最新 PLC 工程提取的 CSV。
+- `pump`：初始化为在位的 S06 储液瓶，取值 `1`、`2` 或 `3`（两瓶）；
+- `s06_robot_workflow`：启用后，S06 烧杯传感器由机器人任务 `11/12` 放置和取走；
+- `s09_pipetting_workflow`：初始化 S09 工位、液体余量并响应全部内部工艺；
+- `s09_remaining_volume_ml`：S09 1-5 号液体瓶的初始余量；
+- `cleanup_on_exit`：正常停止时清理仿真器拥有的 PLC 输出，但保留 PC 写入的任务号、
+  工艺号和参数标志。
+
+默认配置已开启完整的 S06 机器人和 S09 移液工作流。物料在位传感器会在启动时
+初始化，并由对应机器人任务自动更新，无需设置 `SKIP_SENSOR_PRECHECK`。
+
+当前 Uni-Lab-SZLab 驱动默认使用 `szlab_plc_0730.csv`。已校验该表包含仿真器
+所需的全部 106 个节点；启动仿真 Server 时应加载这份节点表，或加载从更新 PLC
+工程提取且包含同等节点的 CSV。
 
 ## Web GUI
 
