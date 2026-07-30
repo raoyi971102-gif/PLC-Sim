@@ -97,13 +97,19 @@ jobs:
           # 同时覆盖 handshake_agent.py 和 szlab_handshake_agent.py：漏杀任何一个
           # 都会留下第二个代理去抢同一批握手标志位
           pkill -f "$REMOTE_DIR/[a-z_]*handshake_agent\.py" || true
-          pkill -f "$REMOTE_DIR/.venv/bin/python -m gui.backend" || true
+          GUI_PATTERN="$REMOTE_DIR/.venv/bin/python -m gui.backend"
+          OLD_PID="$(pgrep -f "$GUI_PATTERN" | head -1 || true)"
+          pkill -f "$GUI_PATTERN" || true
           # 不显式拉起 GUI —— Supervisor 的 autorestart 负责这件事
 
+          # 必须等到 pid 变了才算数：老进程收到 TERM 后还能应答一会儿，直接 curl
+          # 会打在将死的老 backend 上，新代码起不来也照样报绿。
           for _ in $(seq 30); do
             sleep 1
+            NEW_PID="$(pgrep -f "$GUI_PATTERN" | head -1 || true)"
+            [ -n "$NEW_PID" ] && [ "$NEW_PID" != "$OLD_PID" ] || continue
             if curl -fsS http://127.0.0.1:18765/api/health >/dev/null 2>&1; then
-              echo "GUI 已恢复"
+              echo "GUI 已恢复 (pid $OLD_PID -> $NEW_PID)"
               exit 0
             fi
           done
