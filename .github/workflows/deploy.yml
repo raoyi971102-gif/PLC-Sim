@@ -100,6 +100,14 @@ jobs:
           GUI_PATTERN="$REMOTE_DIR/.venv/bin/python -m gui.backend"
           OLD_PID="$(pgrep -f "$GUI_PATTERN" | head -1 || true)"
           pkill -f "$GUI_PATTERN" || true
+          # uvicorn 收到 TERM 会先关监听端口，再等所有连接断开才退出，而日志用的是
+          # SSE 长连接，永远不断。光发 TERM 会让它卡在"端口没了、进程还在"的中间
+          # 态：supervisor 看不到退出就不会重拉，服务直接躺平。所以补一刀 KILL。
+          for _ in $(seq 10); do
+            pgrep -f "$GUI_PATTERN" >/dev/null || break
+            sleep 1
+          done
+          pkill -9 -f "$GUI_PATTERN" || true
           # 不显式拉起 GUI —— Supervisor 的 autorestart 负责这件事
 
           # 必须等到 pid 变了才算数：老进程收到 TERM 后还能应答一会儿，直接 curl
