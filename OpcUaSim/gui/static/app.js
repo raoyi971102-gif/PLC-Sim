@@ -1004,7 +1004,9 @@ setInterval(refreshState, 4000);
     const ss = String(started.getSeconds()).padStart(2, "0");
     const jsMtime = v.static_mtime["app.js"] ? new Date(v.static_mtime["app.js"] * 1000) : null;
     const jsTag = jsMtime ? `${String(jsMtime.getHours()).padStart(2,"0")}:${String(jsMtime.getMinutes()).padStart(2,"0")}` : "?";
-    badge.textContent = `GUI ${GUI_BUILD}  ·  backend ${hh}:${mm}:${ss} (pid ${v.backend_pid})  ·  app.js ${jsTag}`;
+    // 部署版走 CI 写入的 VERSION, 本地开发回落到手写的 GUI_BUILD
+    const release = v.release && v.release !== "dev" ? v.release : GUI_BUILD + " (dev)";
+    badge.textContent = `${release}  ·  backend ${hh}:${mm}:${ss} (pid ${v.backend_pid})  ·  app.js ${jsTag}`;
     badge.title = "点击查看完整 /api/version 响应";
     badge.onclick = () => alert(JSON.stringify(v, null, 2));
   } catch (e) {

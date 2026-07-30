@@ -322,6 +322,17 @@ async def api_health() -> Dict[str, Any]:
 _BACKEND_START_TS = time.time()
 
 
+def _read_release() -> str:
+    """VERSION 由 CI 在 rsync 前写入（短 SHA + 构建时间）。本地开发没有这个文件。"""
+    try:
+        return (_ROOT / "VERSION").read_text(encoding="utf-8").strip() or "dev"
+    except OSError:
+        return "dev"
+
+
+_RELEASE = _read_release()
+
+
 @app.get("/api/version")
 async def api_version() -> Dict[str, Any]:
     """诊断: 报告后端启动时间 + 静态资源 mtime + 是否有新增端点。
@@ -332,6 +343,7 @@ async def api_version() -> Dict[str, Any]:
         return p.stat().st_mtime if p.exists() else None
 
     return {
+        "release": _RELEASE,
         "backend_started": _BACKEND_START_TS,
         "backend_pid": os.getpid(),
         "static_mtime": {
