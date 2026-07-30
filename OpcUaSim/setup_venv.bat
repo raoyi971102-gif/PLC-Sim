@@ -1,12 +1,12 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 chcp 65001 >nul
 
 if exist "%~dp0.venv\Scripts\python.exe" (
   set "BOOTSTRAP_PY=%~dp0.venv\Scripts\python.exe"
 ) else (
-  call "%~dp0_find_python.bat"
-  set "BOOTSTRAP_PY=%PY%"
+  call "%~dp0scripts\find_python.bat"
+  set "BOOTSTRAP_PY=!PY!"
 )
 
 if "%BOOTSTRAP_PY%"=="" (

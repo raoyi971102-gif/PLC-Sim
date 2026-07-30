@@ -9,17 +9,17 @@ if "%PY%"=="" (
   exit /b 1
 )
 
-set "HOST=127.0.0.1"
-set "PORT=18765"
+set "OPCUA_URL=opc.tcp://127.0.0.1:4855/xuse_sim/"
+if not "%~1"=="" set "OPCUA_URL=%~1"
 
 echo ========================================================================
-echo  OpcUaSim GUI
-echo  Python : %PY%
-echo  URL    : http://%HOST%:%PORT%/
+echo  SZLab Poly Studio Handshake Simulator
+echo  Python   : %PY%
+echo  Endpoint : %OPCUA_URL%
 echo ========================================================================
 echo.
-"%PY%" -m gui.backend --host %HOST% --port %PORT%
+"%PY%" "%~dp0szlab_handshake_agent.py" --url "%OPCUA_URL%" --config "%~dp0config\szlab_handshake.yaml"
 echo.
-echo Server exited. Press any key to close.
+echo Simulator exited. Press any key to close.
 pause >nul
 endlocal

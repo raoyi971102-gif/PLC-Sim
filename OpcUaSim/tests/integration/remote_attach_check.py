@@ -4,7 +4,7 @@
 然后断言：状态如实上报为 attached、变量能读、能按类型写并回读、
 GUI 侧的启停接口被正确拒绝，以及变量表能通过上传接口落盘。
 
-    python _test_attach.py
+    python tests/integration/remote_attach_check.py
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 CSV = ROOT / "data" / "demo_variables.csv"
 OPC_PORT = 4877
 GUI = "http://127.0.0.1:18799"
@@ -79,6 +79,17 @@ def main() -> int:
         code, page = call("/api/server/variables?limit=5")
         assert code == 200 and len(page["items"]) == 5, f"变量分页读取失败: {code} {page}"
         print(f"[test] 在线读取 OK：{page['items'][0]['name']} = {page['items'][0]['value']}")
+
+        monitored_ids = [item["node_id"] for item in page["items"][:2]]
+        code, monitored = call(
+            "/api/server/variables/read",
+            {"node_ids": monitored_ids + ["ns=4;s=missing|node"]},
+        )
+        assert code == 200 and [item["node_id"] for item in monitored["items"]] == monitored_ids, \
+            f"监控栏批量读取顺序不符: {code} {monitored}"
+        assert monitored["missing"] == ["ns=4;s=missing|node"], \
+            f"失效监控变量未被报告: {monitored}"
+        print("[test] 监控栏批量读取 OK")
 
         # 写一个 INT16：证明走的是外部 Server 而不是本进程的假状态
         target = next(i for i in call("/api/server/variables?limit=100")[1]["items"]

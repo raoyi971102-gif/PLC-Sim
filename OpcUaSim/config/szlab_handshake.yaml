@@ -1,0 +1,32 @@
+# SZLab Poly Studio 握手仿真配置
+
+# 默认动作延时。可按工位组或具体规则覆盖：
+# robot, s04, s04:1 ... s04:6, s06, s07, s08, s09
+delay_ms: 120
+poll_ms: 20
+
+delays:
+  robot: 180
+  s04: 150
+  s06: 120
+  s07: 150
+  s08: 150
+  s09: 80
+
+# 以下均为 PLC -> 上位机的仿真初值。
+# 这里只初始化握手/状态变量，不伪造物料在位传感器。
+initial_values:
+  Robot_Home: true
+  Robot_任务允许写入: true
+  S05准备信号: true
+  S05加工完成: true
+  S05拍照结果: 1
+  S06准备信号: true
+  S06允许加工: true
+  S07原点信号: true
+  S07允许加工: true
+  S08原点信号: true
+  S08允许加工: true
+  S09允许加工: true
+  S09天平读数稳定: true
+  S09天平读数: 12.34

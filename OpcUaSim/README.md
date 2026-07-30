@@ -27,7 +27,7 @@ start_all.bat
 运行端到端验证：
 
 ```bat
-.venv\Scripts\python.exe _test_client.py
+.venv\Scripts\python.exe tests\integration\xuse_handshake_check.py
 ```
 
 测试覆盖：
@@ -89,10 +89,13 @@ Name,EnglishName,NodeType,DataType,NodeLanguage,NodeId
 |---|---|
 | `start.bat` | 只启动 OPC UA Server |
 | `start_handshake.bat` | 只启动 Handshake Agent |
+| `start_szlab_handshake.bat` | 只启动 SZLab Poly Studio 握手仿真 |
 | `start_all.bat` | 同时启动 Server 和 Agent |
 | `start_gui.bat` | 启动 Web GUI，默认地址 `http://127.0.0.1:18765/` |
 | `pick.bat` | 通过文件选择器加载一份或多份 CSV |
 | `setup_venv.bat` | 创建项目虚拟环境并安装依赖 |
+
+GUI 诊断脚本位于 `tools/diagnose.ps1`。
 
 启动脚本按以下顺序选择 Python：
 
@@ -120,10 +123,48 @@ Handshake Agent：
 python handshake_agent.py `
   --url opc.tcp://127.0.0.1:4855/xuse_sim/ `
   --csv data/demo_variables.csv `
-  --config config.yaml
+  --config config/xuse_handshake.yaml
 ```
 
-`config.yaml` 可覆盖握手延时。
+`config/xuse_handshake.yaml` 可覆盖握手延时。
+
+## SZLab Poly Studio 握手仿真
+
+`szlab_handshake_agent.py` 根据 Uni-Lab-OS 的 SZLab 设备驱动契约模拟 PLC
+侧响应，覆盖：
+
+- Robot 任务允许写入、任务完成和回环复位；
+- S04 六个磁搅位置；
+- S05 拍照完成与 OK 结果；
+- S06 加液；
+- S07 固体加样；
+- S08 开关盖；
+- S09 移液和天平状态。
+
+先启动包含 SZLab 节点的 OPC UA Server，再运行：
+
+```bat
+start_szlab_handshake.bat
+```
+
+也可以指定其他 endpoint：
+
+```bat
+start_szlab_handshake.bat opc.tcp://127.0.0.1:4855/xuse_sim/
+```
+
+GUI 的“握手代理”中可将“仿真协议”切换为 `SZLab Poly Studio`。
+仿真驱动优先使用实机格式
+`ns=4;s=上位机通讯|<变量名>`，找不到时按 BrowseName 递归匹配。
+缺失某个工位节点时默认只跳过该工位；命令行增加 `--strict` 可改为立即报错。
+
+延时和 PLC 侧初始值位于 `config/szlab_handshake.yaml`。默认只初始化握手、就绪和
+允许加工信号，不伪造物料在位传感器；测试机器人纯握手时可在 Uni-LabOS 侧设置
+`SKIP_SENSOR_PRECHECK=1`，或在 YAML 的 `initial_values` 中明确加入所需传感器。
+
+注意：Uni-Lab-OS 当前 `szlab_poly_studio.json` 指向的旧版
+`szlab_plc_0610.csv` 不包含后续加入的完整 Robot/S04/S06-S09 握手变量。
+仿真 Server 应加载与当前设备驱动一致的节点表或从最新 PLC 工程提取的 CSV。
 
 ## Web GUI
 
@@ -135,11 +176,35 @@ GUI 提供三个独立工作区：
 
 - **提取变量**：发现 GVL、预览并导出 OPC UA 变量 CSV。
 - **编辑程序块**：浏览和修改 POU、GVL、DUT。
-- **OPC UA 仿真**：管理 Server/Agent，并在线搜索、读取和修改当前仿真
-  Server 的变量。写入值会按 CSV 声明的数据类型校验，并在写入后回读确认。
+- **OPC UA 仿真**：管理 Server/Agent；从全部变量中搜索、勾选节点并加入
+  监控栏，在监控栏中定时读取或手动刷新，并进行变量写入。写入值会按 CSV
+  声明的数据类型校验，并在写入后回读确认。监控列表保存在当前浏览器中，
+  刷新页面后仍会保留。
 
 即使没有 MCP bundle，GUI 仍能启动 Server 和 Agent。项目打开、POU 编辑、编译、
 下载尝试和 GVL 提取需要配置下面的 MCP 依赖。
+
+### 远程 Linux 挂接
+
+当 OPC UA Server 和 Agent 由 Supervisor 或 systemd 托管时，GUI 可以只挂接现有
+服务，不再尝试占用端口或结束外部进程：
+
+```bash
+python -m gui.backend \
+  --host 0.0.0.0 \
+  --port 18765 \
+  --no-open \
+  --attach-url opc.tcp://127.0.0.1:4855/xuse_sim/ \
+  --attach-csv data/demo_variables.csv
+```
+
+挂接模式保留在线变量读取和写入，但会禁用 GUI 内的 Server/Agent 启停按钮。
+浏览器和服务器不在同一台机器时，可在 GUI 上传 CSV；文件会保存到
+`data/uploads/`，该目录不会提交到 Git。远程挂接的完整自检入口为：
+
+```bash
+python tests/integration/remote_attach_check.py
+```
 
 ## 可选：InoProShop MCP
 
@@ -206,13 +271,20 @@ python -m ino_mcp.cli extract `
 
 ```text
 OpcUaSim/
-├── data/demo_variables.csv       # 开箱即用的四类握手演示表
-├── gui/                          # FastAPI Web GUI
-├── ino_mcp/                      # MCP 客户端、配置、业务封装和 CLI
-├── vendor/inoproshop-mcp/        # 可选第三方 bundle 的本地放置点
+├── config/                       # XUSE / SZLab 握手配置
+├── data/                         # 开箱即用的 CSV 示例
+├── gui/                          # FastAPI Web GUI 与前端资源
+├── ino_mcp/                      # 可选 MCP 客户端、配置、业务封装和 CLI
+├── scripts/                      # 启动器共用的内部脚本
+├── tests/
+│   ├── fixtures/                 # 测试数据
+│   └── integration/              # 可独立运行的端到端检查
+├── tools/                        # 诊断工具
+├── vendor/inoproshop-mcp/        # 可选第三方 bundle 放置点
 ├── common.py
 ├── server.py
 ├── handshake_agent.py
+├── szlab_handshake_agent.py      # SZLab Robot / S04-S09 握手仿真
 ├── requirements.txt
 ├── setup_venv.bat
 └── start*.bat

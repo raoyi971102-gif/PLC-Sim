@@ -1,4 +1,4 @@
-"""端到端验证：连接 XUSE 仿真服务器、触发四类握手、读写节点。"""
+"""手动端到端检查：连接 XUSE 仿真服务器、触发四类握手、读写节点。"""
 import argparse
 import time
 import sys

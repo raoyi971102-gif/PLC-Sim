@@ -7,12 +7,12 @@ REM     start.bat "D:\path\to\my.csv"     (use given CSV)
 REM     start.bat "a.csv" "b.csv" ...     (merge multiple CSVs)
 REM     (drag & drop CSV file(s) onto this bat also works)
 REM   Any argument NOT ending with .csv is forwarded to server.py
-REM   (e.g. --port 4860 --config config.yaml)
+REM   (e.g. --port 4860)
 REM ============================================================
 setlocal EnableDelayedExpansion
 chcp 65001 > nul
 set PYTHONIOENCODING=utf-8
-call "%~dp0_find_python.bat"
+call "%~dp0scripts\find_python.bat"
 if "%PY%"=="" (
     echo [X] Python not found. Run setup_venv.bat or install Python 3.10+.
     exit /b 1

@@ -5,7 +5,7 @@
 
 // 版本 marker —— F12 Console 里能看到. 如果你看到的是旧样式但这一行没打印,
 // 说明你的浏览器根本没执行这份 app.js (纯缓存旧文件).
-const GUI_BUILD = "2026-07-29_professional-online-vars";
+const GUI_BUILD = "2026-07-30_log-layout-fix";
 console.log("%c[OpcUaSim] GUI build " + GUI_BUILD, "color:#3ecf8e;font-weight:bold");
 
 const $ = (id) => document.getElementById(id);
@@ -106,18 +106,19 @@ function renderState(s) {
   $("btnAgentStart").disabled = !!s.busy || s.agent.running || s.agent.stopping;
   $("btnAgentStop").disabled = !!s.busy || s.agent.stopping || !s.agent.running || s.agent.attached;
   $("btnClose").disabled = !!s.busy || !s.project;
-  $("btnRefreshVars").disabled = variablePage.loading || !s.server.running;
-  $("btnVarsPrev").disabled = variablePage.loading || !s.server.running || variablePage.offset <= 0;
-  $("btnVarsNext").disabled =
-    variablePage.loading || !s.server.running ||
-    variablePage.offset + variablePage.limit >= variablePage.total;
+  updateVariableControls();
 
   if (s.server.running && !lastServerRunning) {
     loadServerVariables({ reset: true });
+    refreshMonitoredVariables({ announce: false });
+    scheduleMonitorRefresh();
   } else if (!s.server.running && lastServerRunning) {
-    clearServerVariables("服务已停止。启动 OPC UA Server 后可继续在线读写。");
+    clearServerVariables("服务已停止。启动 OPC UA Server 后可继续选择变量。");
+    markMonitorsOffline();
+    scheduleMonitorRefresh();
   } else if (firstState && !s.server.running) {
-    clearServerVariables("启动 OPC UA Server 后即可查看和修改在线变量。");
+    clearServerVariables("启动 OPC UA Server 后即可选择在线变量。");
+    markMonitorsOffline();
   }
   lastServerRunning = s.server.running;
 }
@@ -449,6 +450,7 @@ $("btnServerStop").onclick = () => stopManagedProcess(
 $("btnAgentStart").onclick = async () => {
   try {
     const r = await post("/api/agent/start", {
+      profile: $("agentProfile").value,
       host: $("agentHost").value.trim() || "127.0.0.1",
       port: parseInt($("agentPort").value, 10) || 4855,
       config: $("agentCfg").value.trim() || null,
@@ -457,6 +459,12 @@ $("btnAgentStart").onclick = async () => {
     console.log("agent started pid=", r.pid);
     await refreshState();
   } catch (e) { alert(e.message); }
+};
+$("agentProfile").onchange = () => {
+  const szlab = $("agentProfile").value === "szlab";
+  $("agentCfg").value = szlab
+    ? "config/szlab_handshake.yaml"
+    : "config/xuse_handshake.yaml";
 };
 $("btnAgentStop").onclick = () => stopManagedProcess(
   $("btnAgentStop"), "/api/agent/stop"
@@ -471,7 +479,12 @@ const variablePage = {
   items: [],
   loading: false,
 };
+const MONITOR_STORAGE_KEY = "opcuasim.monitored-variables.v1";
+const selectedVariables = new Map();
+let monitoredVariables = loadStoredMonitors();
+const monitorState = { loading: false };
 let variableSearchTimer = null;
+let monitorRefreshTimer = null;
 
 function variableMessage(text, kind = "neutral") {
   const node = $("serverVarMessage");
@@ -479,17 +492,96 @@ function variableMessage(text, kind = "neutral") {
   node.textContent = text;
 }
 
+function monitorMessage(text, kind = "neutral") {
+  const node = $("monitorVarMessage");
+  node.className = `result-box ${kind}`;
+  node.textContent = text;
+}
+
+function loadStoredMonitors() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(MONITOR_STORAGE_KEY) || "[]");
+    if (!Array.isArray(stored)) return [];
+    return stored
+      .filter(item => item && item.node_id && item.name && item.data_type)
+      .slice(0, 200)
+      .map(item => ({
+        name: String(item.name),
+        english_name: String(item.english_name || ""),
+        data_type: String(item.data_type),
+        node_id: String(item.node_id),
+        value: null,
+        draft: null,
+        missing: false,
+        offline: true,
+      }));
+  } catch (_) {
+    return [];
+  }
+}
+
+function persistMonitors() {
+  try {
+    localStorage.setItem(MONITOR_STORAGE_KEY, JSON.stringify(
+      monitoredVariables.map(({ name, english_name, data_type, node_id }) => ({
+        name, english_name, data_type, node_id,
+      }))
+    ));
+  } catch (e) {
+    console.warn("无法保存监控栏:", e);
+  }
+}
+
+function isMonitored(nodeId) {
+  return monitoredVariables.some(item => item.node_id === nodeId);
+}
+
+function formatVariableValue(value) {
+  if (value === null || value === undefined) return "--";
+  if (typeof value === "object") {
+    try { return JSON.stringify(value); }
+    catch (_) { return String(value); }
+  }
+  return String(value);
+}
+
+function updateVariableControls() {
+  const running = !!currentAppState?.server?.running;
+  const selectable = variablePage.items.filter(item => !isMonitored(item.node_id));
+  const selectedOnPage = selectable.filter(item => selectedVariables.has(item.node_id));
+  const selectPage = $("selectPageVars");
+  selectPage.disabled = variablePage.loading || !running || selectable.length === 0;
+  selectPage.checked = selectable.length > 0 && selectedOnPage.length === selectable.length;
+  selectPage.indeterminate =
+    selectedOnPage.length > 0 && selectedOnPage.length < selectable.length;
+
+  $("selectedVarCount").textContent = `已选 ${selectedVariables.size} 个`;
+  $("btnAddSelectedVars").disabled =
+    variablePage.loading || !running || selectedVariables.size === 0;
+  $("btnRefreshVars").disabled = variablePage.loading || !running;
+  $("btnVarsPrev").disabled =
+    variablePage.loading || !running || variablePage.offset <= 0;
+  $("btnVarsNext").disabled =
+    variablePage.loading || !running ||
+    variablePage.offset + variablePage.limit >= variablePage.total;
+
+  $("btnRefreshMonitor").disabled =
+    monitorState.loading || !running || monitoredVariables.length === 0;
+  $("btnClearMonitor").disabled = monitoredVariables.length === 0;
+  $("monitorRefreshInterval").disabled = !$("monitorAutoRefresh").checked;
+}
+
 function clearServerVariables(message) {
   variablePage.offset = 0;
   variablePage.total = 0;
   variablePage.items = [];
+  selectedVariables.clear();
   $("serverVarCount").textContent = "0 个变量";
   $("serverVarsTable").querySelector("tbody").innerHTML =
-    `<tr><td colspan="5" class="empty-cell">${escapeHtml(message || "暂无在线变量")}</td></tr>`;
+    `<tr><td colspan="6" class="empty-cell">${escapeHtml(message || "暂无在线变量")}</td></tr>`;
   $("serverVarPageInfo").textContent = "第 0 / 0 页";
-  $("btnVarsPrev").disabled = true;
-  $("btnVarsNext").disabled = true;
   variableMessage(message || "暂无在线变量");
+  updateVariableControls();
 }
 
 function renderServerVariables() {
@@ -498,44 +590,37 @@ function renderServerVariables() {
   const currentPage = totalPages ? Math.floor(variablePage.offset / variablePage.limit) + 1 : 0;
   $("serverVarCount").textContent = `${variablePage.total} 个变量`;
   $("serverVarPageInfo").textContent = `第 ${currentPage} / ${totalPages} 页`;
-  $("btnVarsPrev").disabled = variablePage.loading || variablePage.offset <= 0;
-  $("btnVarsNext").disabled =
-    variablePage.loading || variablePage.offset + variablePage.limit >= variablePage.total;
 
   if (!variablePage.items.length) {
     const text = variablePage.query ? "没有匹配的变量" : "当前 CSV 中没有可显示的变量";
-    tbody.innerHTML = `<tr><td colspan="5" class="empty-cell">${text}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="empty-cell">${text}</td></tr>`;
+    updateVariableControls();
     return;
   }
 
   tbody.innerHTML = variablePage.items.map((item, index) => {
-    let editor;
-    if (item.data_type === "BOOLEAN") {
-      const current = item.value === true || String(item.value).toLowerCase() === "true";
-      editor = `<select class="value-editor" aria-label="${escapeHtml(item.name)} 当前值">` +
-        `<option value="true"${current ? " selected" : ""}>true</option>` +
-        `<option value="false"${!current ? " selected" : ""}>false</option></select>`;
-    } else {
-      const isNumeric = ["INT16", "INT32", "FLOAT"].includes(item.data_type);
-      const step = item.data_type === "FLOAT" ? "any" : "1";
-      editor = `<input class="value-editor" ${isNumeric ? `type="number" step="${step}"` : `type="text"`} ` +
-        `value="${escapeHtml(item.value ?? "")}" aria-label="${escapeHtml(item.name)} 当前值">`;
-    }
+    const monitored = isMonitored(item.node_id);
+    const selected = selectedVariables.has(item.node_id);
     return `<tr data-index="${index}">` +
+      `<td class="select-cell"><input class="var-select" type="checkbox" ` +
+      `aria-label="选择 ${escapeHtml(item.name)}" ${selected ? "checked" : ""} ` +
+      `${monitored ? "disabled" : ""}></td>` +
       `<td class="variable-name"><strong>${escapeHtml(item.name)}</strong>` +
       `<small>${escapeHtml(item.english_name || "")}</small></td>` +
       `<td><span class="type-pill">${escapeHtml(item.data_type)}</span></td>` +
-      `<td>${editor}</td>` +
+      `<td><span class="read-value">${escapeHtml(formatVariableValue(item.value))}</span></td>` +
       `<td class="node-id">${escapeHtml(item.node_id)}</td>` +
-      `<td><button class="btn small var-save">写入</button></td>` +
+      `<td>${monitored ? '<span class="monitor-status active">已监控</span>' :
+        '<span class="monitor-status">未监控</span>'}</td>` +
       `</tr>`;
   }).join("");
+  updateVariableControls();
 }
 
 async function loadServerVariables({ reset = false } = {}) {
   if (variablePage.loading) return;
   if (!currentAppState?.server?.running) {
-    clearServerVariables("启动 OPC UA Server 后即可查看和修改在线变量。");
+    clearServerVariables("启动 OPC UA Server 后即可选择在线变量。");
     return;
   }
   if (reset) variablePage.offset = 0;
@@ -567,7 +652,6 @@ async function loadServerVariables({ reset = false } = {}) {
     renderServerVariables();
   } finally {
     variablePage.loading = false;
-    $("btnRefreshVars").disabled = false;
     renderServerVariables();
   }
 }
@@ -589,32 +673,278 @@ $("btnVarsNext").onclick = () => {
   }
 };
 
-$("serverVarsTable").addEventListener("click", async (event) => {
-  const button = event.target.closest(".var-save");
-  if (!button) return;
-  const row = button.closest("tr");
+$("serverVarsTable").addEventListener("change", event => {
+  const checkbox = event.target.closest(".var-select");
+  if (!checkbox) return;
+  const row = checkbox.closest("tr");
   const item = variablePage.items[Number(row.dataset.index)];
-  const editor = row.querySelector(".value-editor");
-  if (!item || !editor) return;
+  if (!item) return;
+  if (checkbox.checked) selectedVariables.set(item.node_id, item);
+  else selectedVariables.delete(item.node_id);
+  updateVariableControls();
+});
 
+$("selectPageVars").onchange = event => {
+  variablePage.items.forEach(item => {
+    if (isMonitored(item.node_id)) return;
+    if (event.target.checked) selectedVariables.set(item.node_id, item);
+    else selectedVariables.delete(item.node_id);
+  });
+  renderServerVariables();
+};
+
+$("btnAddSelectedVars").onclick = () => {
+  let added = 0;
+  for (const item of selectedVariables.values()) {
+    if (isMonitored(item.node_id) || monitoredVariables.length >= 200) continue;
+    monitoredVariables.push({
+      ...item,
+      draft: null,
+      missing: false,
+      offline: false,
+    });
+    added += 1;
+  }
+  selectedVariables.clear();
+  persistMonitors();
+  renderMonitoredVariables();
+  renderServerVariables();
+  scheduleMonitorRefresh();
+  monitorMessage(
+    added
+      ? `已添加 ${added} 个变量。监控栏将按设置的周期读取当前值。`
+      : "没有可添加的变量，或监控栏已达到 200 个上限。",
+    added ? "success" : "neutral"
+  );
+  if (added) {
+    document.querySelector(".monitor-card").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+};
+
+function monitorEditor(item) {
+  const draft = item.draft === null ? item.value : item.draft;
+  if (item.data_type === "BOOLEAN") {
+    const current = draft === true || String(draft).toLowerCase() === "true";
+    return `<select class="value-editor monitor-editor" aria-label="${escapeHtml(item.name)} 新值">` +
+      `<option value="true"${current ? " selected" : ""}>true</option>` +
+      `<option value="false"${!current ? " selected" : ""}>false</option></select>`;
+  }
+  const isNumeric = ["INT16", "INT32", "FLOAT"].includes(item.data_type);
+  const step = item.data_type === "FLOAT" ? "any" : "1";
+  const value = draft === null || draft === undefined ? "" : draft;
+  return `<input class="value-editor monitor-editor" ` +
+    `${isNumeric ? `type="number" step="${step}"` : 'type="text"'} ` +
+    `value="${escapeHtml(value)}" aria-label="${escapeHtml(item.name)} 新值">`;
+}
+
+function renderMonitoredVariables() {
+  const tbody = $("monitorVarsTable").querySelector("tbody");
+  $("monitorVarCount").textContent = `${monitoredVariables.length} 个监控`;
+  if (!monitoredVariables.length) {
+    tbody.innerHTML =
+      '<tr><td colspan="6" class="empty-cell">尚未添加监控变量</td></tr>';
+    updateVariableControls();
+    return;
+  }
+
+  tbody.innerHTML = monitoredVariables.map((item, index) =>
+    `<tr data-index="${index}">` +
+    `<td class="variable-name"><strong>${escapeHtml(item.name)}</strong>` +
+    `<small>${escapeHtml(item.english_name || "")}</small></td>` +
+    `<td><span class="type-pill">${escapeHtml(item.data_type)}</span></td>` +
+    `<td><span class="monitor-current">--</span></td>` +
+    `<td>${monitorEditor(item)}</td>` +
+    `<td class="node-id">${escapeHtml(item.node_id)}</td>` +
+    `<td class="monitor-actions">` +
+    `<button class="btn small monitor-write">写入</button>` +
+    `<button class="text-button monitor-remove">移除</button>` +
+    `</td></tr>`
+  ).join("");
+  updateMonitorRows();
+  if (currentAppState === null) {
+    monitorMessage(`已恢复 ${monitoredVariables.length} 个监控变量，服务连接后将自动读取。`);
+  }
+}
+
+function updateMonitorRows() {
+  const running = !!currentAppState?.server?.running;
+  els("tbody tr[data-index]", $("monitorVarsTable")).forEach(row => {
+    const item = monitoredVariables[Number(row.dataset.index)];
+    if (!item) return;
+    const current = el(".monitor-current", row);
+    const editor = el(".monitor-editor", row);
+    const writeButton = el(".monitor-write", row);
+
+    current.className = "monitor-current";
+    if (item.offline) {
+      current.textContent = "服务未运行";
+      current.classList.add("offline");
+    } else if (item.missing) {
+      current.textContent = "节点不存在";
+      current.classList.add("missing");
+    } else {
+      current.textContent = formatVariableValue(item.value);
+    }
+    editor.disabled = !running || item.missing || item.offline;
+    writeButton.disabled = monitorState.loading || !running || item.missing || item.offline;
+    if (item.draft === null && document.activeElement !== editor) {
+      editor.value = formatVariableValue(item.value) === "--"
+        ? (item.data_type === "BOOLEAN" ? "false" : "")
+        : formatVariableValue(item.value);
+    }
+  });
+  updateVariableControls();
+}
+
+function markMonitorsOffline() {
+  monitoredVariables.forEach(item => { item.offline = true; });
+  updateMonitorRows();
+  if (monitoredVariables.length) {
+    monitorMessage("服务未运行，监控变量已保留，服务恢复后会继续读取。");
+  }
+}
+
+async function refreshMonitoredVariables({ announce = true } = {}) {
+  if (monitorState.loading || !monitoredVariables.length) return;
+  if (!currentAppState?.server?.running) {
+    markMonitorsOffline();
+    return;
+  }
+  if (document.hidden && !announce) return;
+
+  monitorState.loading = true;
+  updateMonitorRows();
+  if (announce) monitorMessage("正在读取监控变量…");
+  try {
+    const response = await post("/api/server/variables/read", {
+      node_ids: monitoredVariables.map(item => item.node_id),
+    }, 7000);
+    const values = new Map(response.items.map(item => [item.node_id, item]));
+    const missing = new Set(response.missing || []);
+    monitoredVariables.forEach(item => {
+      const fresh = values.get(item.node_id);
+      item.offline = false;
+      item.missing = missing.has(item.node_id);
+      if (fresh) {
+        item.name = fresh.name;
+        item.english_name = fresh.english_name || "";
+        item.data_type = fresh.data_type;
+        item.value = fresh.value;
+      }
+    });
+
+    variablePage.items.forEach(item => {
+      const fresh = values.get(item.node_id);
+      if (fresh) item.value = fresh.value;
+    });
+    updateMonitorRows();
+    renderServerVariables();
+    const missingCount = missing.size;
+    if (announce || missingCount) {
+      monitorMessage(
+        `已读取 ${response.items.length} 个监控变量` +
+        `${missingCount ? `，${missingCount} 个节点不在当前变量表中` : ""}。`,
+        missingCount ? "neutral" : "success"
+      );
+    }
+  } catch (e) {
+    monitorMessage(`读取监控变量失败：${e.message}`, "error");
+  } finally {
+    monitorState.loading = false;
+    updateMonitorRows();
+  }
+}
+
+function scheduleMonitorRefresh() {
+  if (monitorRefreshTimer !== null) {
+    clearInterval(monitorRefreshTimer);
+    monitorRefreshTimer = null;
+  }
+  updateVariableControls();
+  if (
+    !$("monitorAutoRefresh").checked ||
+    !currentAppState?.server?.running ||
+    !monitoredVariables.length
+  ) return;
+  const interval = parseInt($("monitorRefreshInterval").value, 10) || 2000;
+  monitorRefreshTimer = setInterval(
+    () => refreshMonitoredVariables({ announce: false }),
+    interval
+  );
+}
+
+$("btnRefreshMonitor").onclick = () => refreshMonitoredVariables();
+$("monitorAutoRefresh").onchange = scheduleMonitorRefresh;
+$("monitorRefreshInterval").onchange = scheduleMonitorRefresh;
+$("btnClearMonitor").onclick = () => {
+  monitoredVariables = [];
+  selectedVariables.clear();
+  persistMonitors();
+  renderMonitoredVariables();
+  renderServerVariables();
+  scheduleMonitorRefresh();
+  monitorMessage("监控栏已清空，可从全部变量中重新添加。");
+};
+
+$("monitorVarsTable").addEventListener("input", event => {
+  const editor = event.target.closest(".monitor-editor");
+  if (!editor) return;
+  const row = editor.closest("tr");
+  const item = monitoredVariables[Number(row.dataset.index)];
+  if (item) item.draft = editor.value;
+});
+
+$("monitorVarsTable").addEventListener("click", async event => {
+  const row = event.target.closest("tr[data-index]");
+  if (!row) return;
+  const index = Number(row.dataset.index);
+  const item = monitoredVariables[index];
+  if (!item) return;
+
+  if (event.target.closest(".monitor-remove")) {
+    monitoredVariables.splice(index, 1);
+    selectedVariables.delete(item.node_id);
+    persistMonitors();
+    renderMonitoredVariables();
+    renderServerVariables();
+    scheduleMonitorRefresh();
+    monitorMessage(`${item.name} 已移出监控栏。`);
+    return;
+  }
+
+  const button = event.target.closest(".monitor-write");
+  if (!button) return;
+  const editor = el(".monitor-editor", row);
   const oldText = button.textContent;
   button.disabled = true;
   button.textContent = "写入中";
   try {
-    const r = await post("/api/server/variable", {
+    const response = await post("/api/server/variable", {
       node_id: item.node_id,
       value: editor.value,
     }, 7000);
-    item.value = r.value;
-    editor.value = String(r.value);
-    variableMessage(`${item.name} 已写入，服务器回读值为 ${String(r.value)}。`, "success");
+    item.value = response.value;
+    item.draft = null;
+    item.offline = false;
+    item.missing = false;
+    variablePage.items.forEach(pageItem => {
+      if (pageItem.node_id === item.node_id) pageItem.value = response.value;
+    });
+    updateMonitorRows();
+    renderServerVariables();
+    monitorMessage(
+      `${item.name} 已写入，服务器回读值为 ${formatVariableValue(response.value)}。`,
+      "success"
+    );
   } catch (e) {
-    variableMessage(`${item.name} 写入失败：${e.message}`, "error");
+    monitorMessage(`${item.name} 写入失败：${e.message}`, "error");
   } finally {
-    button.disabled = false;
     button.textContent = oldText;
+    updateMonitorRows();
   }
 });
+
+renderMonitoredVariables();
 
 // ---------------- 日志 SSE ----------------
 const logBox = $("logBox");
@@ -697,7 +1027,6 @@ setInterval(refreshState, 4000);
   function applyHeight(h) {
     h = Math.max(MIN_H, Math.min(MAX_H(), h));
     document.documentElement.style.setProperty("--log-h", h + "px");
-    logbar.style.height = h + "px";
   }
   // 恢复保存的高度
   const saved = parseInt(localStorage.getItem(LS_KEY), 10);
@@ -732,12 +1061,11 @@ setInterval(refreshState, 4000);
   // 折叠按钮
   function setCollapsed(c) {
     logbar.classList.toggle("collapsed", c);
+    resizer.classList.toggle("collapsed", c);
     collapseBtn.textContent = c ? "展开" : "收起";
     if (!c) {
       const h = parseInt(localStorage.getItem(LS_KEY), 10) || 240;
       applyHeight(h);
-    } else {
-      document.documentElement.style.setProperty("--log-h", "36px");
     }
     localStorage.setItem(LS_COLLAPSED, c ? "1" : "0");
   }

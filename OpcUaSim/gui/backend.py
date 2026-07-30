@@ -1114,6 +1114,46 @@ async def api_server_variables(
     }
 
 
+class ServerVariablesReadReq(BaseModel):
+    node_ids: List[str]
+
+
+@app.post("/api/server/variables/read")
+async def api_server_variables_read(req: ServerVariablesReadReq) -> Dict[str, Any]:
+    """批量读取监控栏中的变量，保持请求顺序并报告已失效的 NodeId。"""
+    _require_running_server()
+    node_ids = list(dict.fromkeys(item.strip() for item in req.node_ids if item.strip()))
+    if len(node_ids) > 200:
+        raise HTTPException(400, "监控栏一次最多读取 200 个变量")
+
+    definitions = {item.node_id: item for item in _STATE.server_node_defs}
+    selected = [definitions[node_id] for node_id in node_ids if node_id in definitions]
+    missing = [node_id for node_id in node_ids if node_id not in definitions]
+    if not selected:
+        return {"ok": True, "items": [], "missing": missing}
+
+    assert _STATE.server_client_url is not None
+    try:
+        async with _STATE.server_io_lock:
+            values = await asyncio.to_thread(
+                _read_node_values, _STATE.server_client_url, selected
+            )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"读取监控变量失败: {exc}") from exc
+
+    items = [
+        {
+            "name": node_def.name_cn,
+            "english_name": node_def.name_en,
+            "data_type": node_def.data_type,
+            "node_id": node_def.node_id,
+            "value": value,
+        }
+        for node_def, value in zip(selected, values)
+    ]
+    return {"ok": True, "items": items, "missing": missing}
+
+
 class ServerVariableWriteReq(BaseModel):
     node_id: str
     value: Any
@@ -1161,6 +1201,7 @@ class AgentStartReq(BaseModel):
     port: int = 4855
     config: Optional[str] = None      # 可选 yaml
     csv: Optional[str] = None
+    profile: str = "xuse"
 
 
 @app.post("/api/agent/start")
@@ -1170,15 +1211,24 @@ async def api_agent_start(req: AgentStartReq) -> Dict[str, Any]:
     if _STATE.agent_proc is not None and _STATE.agent_proc.poll() is None:
         raise HTTPException(400, "Handshake Agent 已在运行")
     py = _find_python_exe()
-    agent_py = _ROOT / "handshake_agent.py"
     url = f"opc.tcp://{req.host}:{req.port}/xuse_sim/"
-    cmd = [py, str(agent_py), "--url", url]
-    if req.config:
-        cmd.extend(["--config", req.config])
-    csv_path = req.csv or _STATE.last_extract_csv or str(default_csv_path())
-    if not Path(csv_path).exists():
-        raise HTTPException(400, f"CSV 不存在: {csv_path}")
-    cmd.extend(["--csv", csv_path])
+    profile = req.profile.strip().lower()
+    if profile == "szlab":
+        agent_py = _ROOT / "szlab_handshake_agent.py"
+        cmd = [py, str(agent_py), "--url", url]
+        if req.config:
+            cmd.extend(["--config", req.config])
+    elif profile == "xuse":
+        agent_py = _ROOT / "handshake_agent.py"
+        cmd = [py, str(agent_py), "--url", url]
+        if req.config:
+            cmd.extend(["--config", req.config])
+        csv_path = req.csv or _STATE.last_extract_csv or str(default_csv_path())
+        if not Path(csv_path).exists():
+            raise HTTPException(400, f"CSV 不存在: {csv_path}")
+        cmd.extend(["--csv", csv_path])
+    else:
+        raise HTTPException(400, "未知握手仿真类型，仅支持 xuse 或 szlab")
 
     log.info("启动 Handshake Agent: %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -1186,7 +1236,7 @@ async def api_agent_start(req: AgentStartReq) -> Dict[str, Any]:
     _pipe_to_logger(proc, "agent")
     _STATE.agent_proc = proc
     await asyncio.sleep(0.3)
-    return {"ok": True, "pid": proc.pid}
+    return {"ok": True, "pid": proc.pid, "profile": profile}
 
 
 @app.post("/api/agent/stop")

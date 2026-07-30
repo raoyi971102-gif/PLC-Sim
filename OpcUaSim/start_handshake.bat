@@ -7,14 +7,14 @@ REM
 REM Usage:
 REM   start_handshake.bat                                (default url, default CSV)
 REM   start_handshake.bat "D:\path\to\my.csv"            (use given CSV, must match server)
-REM   start_handshake.bat --config config.yaml           (custom timing)
+REM   start_handshake.bat --config config\xuse_handshake.yaml
 REM   start_handshake.bat --url opc.tcp://host:port/xuse_sim/
 REM   (drag & drop CSV file(s) onto this bat also works)
 REM ============================================================
 setlocal EnableDelayedExpansion
 chcp 65001 > nul
 set PYTHONIOENCODING=utf-8
-call "%~dp0_find_python.bat"
+call "%~dp0scripts\find_python.bat"
 if "%PY%"=="" (
     echo [X] Python not found. Run setup_venv.bat or install Python 3.10+.
     exit /b 1

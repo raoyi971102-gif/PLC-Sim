@@ -7,14 +7,14 @@ XUSE 握手仿真代理（独立进程）
   Type-C 参数下发  (_参数下发 → _参数下发完成)
   Type-D 初始化    (_初始化   → _初始化完成)
 
-支持通过 --config config.yaml 覆盖各握手默认耗时。
+支持通过 --config config/xuse_handshake.yaml 覆盖各握手默认耗时。
 可只启动本代理来仿真握手（Server 必须先启动）。
 可只启动 Server 而不启本代理（此时所有写入的 W 节点永远不会得到应答）。
 
 用法：
     python handshake_agent.py                                # 连默认 endpoint 与 CSV
     python handshake_agent.py --url opc.tcp://127.0.0.1:4855/xuse_sim/
-    python handshake_agent.py --csv my.csv --config config.yaml
+    python handshake_agent.py --csv my.csv --config config/xuse_handshake.yaml
     python handshake_agent.py --request-always-true          # 所有 _请求加工 常置 TRUE
 """
 

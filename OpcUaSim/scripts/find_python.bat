@@ -1,8 +1,9 @@
 @echo off
-REM _find_python.bat -- Detect a real python.exe (skip WindowsApps stub).
+REM find_python.bat -- Detect a real python.exe (skip WindowsApps stub).
 REM  Priority: project .venv > %PYTHON% > known Miniforge paths > PATH
+for %%I in ("%~dp0..") do set "OPCUASIM_ROOT=%%~fI"
 set "PY="
-if exist "%~dp0.venv\Scripts\python.exe" set "PY=%~dp0.venv\Scripts\python.exe"
+if exist "%OPCUASIM_ROOT%\.venv\Scripts\python.exe" set "PY=%OPCUASIM_ROOT%\.venv\Scripts\python.exe"
 if defined PYTHON (
   if "%PY%"=="" if exist "%PYTHON%" set "PY=%PYTHON%"
 )

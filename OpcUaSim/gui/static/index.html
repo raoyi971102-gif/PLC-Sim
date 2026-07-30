@@ -228,7 +228,7 @@
         <div>
           <span class="eyebrow">运行与调试</span>
           <h1>OPC UA 仿真</h1>
-          <p>管理本地仿真服务与握手代理，并直接查看、修改当前服务器变量。</p>
+          <p>管理本地仿真服务与握手代理，从全部变量中选择节点加入监控栏进行读写。</p>
         </div>
         <div class="endpoint-summary">
           <span>当前端点</span>
@@ -297,6 +297,13 @@
           </div>
           <div class="form-grid">
             <label class="field full">
+              <span>仿真协议</span>
+              <select id="agentProfile">
+                <option value="xuse">XUSE 通用握手</option>
+                <option value="szlab">SZLab Poly Studio</option>
+              </select>
+            </label>
+            <label class="field full">
               <span>变量 CSV</span>
               <input id="agentCsv" value="data/demo_variables.csv">
             </label>
@@ -310,7 +317,7 @@
             </label>
             <label class="field full">
               <span>代理配置</span>
-              <input id="agentCfg" value="config.yaml">
+              <input id="agentCfg" value="config/xuse_handshake.yaml">
             </label>
           </div>
           <div class="card-actions">
@@ -320,14 +327,60 @@
         </article>
       </div>
 
-      <article class="card variables-card">
+      <article class="card variables-card monitor-card">
         <div class="card-header variables-header">
           <div>
             <div class="title-line">
-              <h2>在线变量</h2>
-              <span class="count-badge" id="serverVarCount">0 个变量</span>
+              <h2>变量监控栏</h2>
+              <span class="count-badge" id="monitorVarCount">0 个监控</span>
             </div>
-            <p>读取服务器当前值；修改后写回节点并立即回读确认。</p>
+            <p>持续读取已添加的节点；新值仅在点击写入后提交，并立即回读确认。</p>
+          </div>
+          <div class="variable-tools monitor-tools">
+            <label class="compact-check monitor-auto">
+              <input id="monitorAutoRefresh" type="checkbox" checked>
+              自动刷新
+            </label>
+            <select id="monitorRefreshInterval" class="compact-select" aria-label="监控刷新周期">
+              <option value="1000">每 1 秒</option>
+              <option value="2000" selected>每 2 秒</option>
+              <option value="5000">每 5 秒</option>
+            </select>
+            <button id="btnRefreshMonitor" class="btn">立即读取</button>
+            <button id="btnClearMonitor" class="btn danger">清空监控</button>
+          </div>
+        </div>
+        <div id="monitorVarMessage" class="result-box neutral">
+          从下方全部变量中选择节点并添加到监控栏。
+        </div>
+        <div class="table-wrap monitor-table-wrap">
+          <table id="monitorVarsTable" class="online-table monitor-table">
+            <thead>
+              <tr>
+                <th>变量</th>
+                <th>数据类型</th>
+                <th>当前值</th>
+                <th>新值</th>
+                <th>NodeId</th>
+                <th class="action-column">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td colspan="6" class="empty-cell">尚未添加监控变量</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card variables-card all-variables-card">
+        <div class="card-header variables-header">
+          <div>
+            <div class="title-line">
+              <h2>全部变量</h2>
+              <span class="count-badge" id="serverVarCount">0 个变量</span>
+              <span class="selection-badge" id="selectedVarCount">已选 0 个</span>
+            </div>
+            <p>搜索并勾选需要关注的节点，然后统一添加到上方监控栏。</p>
           </div>
           <div class="variable-tools">
             <input id="serverVarSearch" class="search-input" placeholder="搜索名称、类型或 NodeId">
@@ -336,25 +389,29 @@
               <option value="100" selected>每页 100</option>
               <option value="200">每页 200</option>
             </select>
-            <button id="btnRefreshVars" class="btn">刷新当前值</button>
+            <button id="btnRefreshVars" class="btn">刷新列表值</button>
+            <button id="btnAddSelectedVars" class="btn primary" disabled>添加到监控栏</button>
           </div>
         </div>
         <div id="serverVarMessage" class="result-box neutral">
-          启动 OPC UA Server 后即可查看和修改在线变量。
+          启动 OPC UA Server 后即可选择在线变量。
         </div>
         <div class="table-wrap online-table-wrap">
           <table id="serverVarsTable" class="online-table">
             <thead>
               <tr>
+                <th class="select-column">
+                  <input id="selectPageVars" type="checkbox" aria-label="选择当前页变量">
+                </th>
                 <th>变量</th>
                 <th>数据类型</th>
-                <th>当前值 / 新值</th>
+                <th>当前值</th>
                 <th>NodeId</th>
-                <th class="action-column">操作</th>
+                <th>监控状态</th>
               </tr>
             </thead>
             <tbody>
-              <tr><td colspan="5" class="empty-cell">服务尚未启动</td></tr>
+              <tr><td colspan="6" class="empty-cell">服务尚未启动</td></tr>
             </tbody>
           </table>
         </div>

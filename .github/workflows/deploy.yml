@@ -27,7 +27,7 @@ jobs:
         run: pip install -r requirements.txt
       - name: 自检
         working-directory: OpcUaSim
-        run: python _test_attach.py
+        run: python tests/integration/remote_attach_check.py
 
   deploy:
     needs: test
