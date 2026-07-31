@@ -131,6 +131,47 @@ SUPPORTED_ACTIONS = (
     "szlab_poly_plc.get_stack_status",
 )
 
+WORKFLOW_IDS = (
+    "szlab_magnetic_stirring_workflow",
+    "szlab_photoshotting_workflow",
+    "szlab_robot_action_workflow",
+    "s04_robot_stirring_workflow",
+    "s06_robot_workflow",
+    "s07_robot_workflow",
+    "szlab_s07_solid_addition_workflow",
+    "s08_cap_workflow",
+    "szlab_s09_pipetting_workflow",
+    "szlab_stack_s05_s06_workflow",
+    "szlab_mixer_workflow",
+    "szlab_mixer_pump_production",
+)
+
+# 组件名同时也是节点发现和轮询的能力组。photo 只负责初始化 S05 的只读
+# 完成信号，没有周期状态机。
+WORKFLOW_COMPONENTS = {
+    "szlab_magnetic_stirring_workflow": frozenset({"s04"}),
+    "szlab_photoshotting_workflow": frozenset({"photo"}),
+    "szlab_robot_action_workflow": frozenset({"robot"}),
+    "s04_robot_stirring_workflow": frozenset({"robot", "s04"}),
+    "s06_robot_workflow": frozenset({"robot", "s06"}),
+    "s07_robot_workflow": frozenset({"robot"}),
+    "szlab_s07_solid_addition_workflow": frozenset({"s07"}),
+    "s08_cap_workflow": frozenset({"s08"}),
+    "szlab_s09_pipetting_workflow": frozenset({"s09"}),
+    "szlab_stack_s05_s06_workflow": frozenset({"photo", "s06"}),
+    "szlab_mixer_workflow": frozenset({"s06"}),
+    "szlab_mixer_pump_production": frozenset({"s06"}),
+}
+ALL_COMPONENTS = frozenset().union(*WORKFLOW_COMPONENTS.values())
+
+WORKFLOW_ROBOT_TASKS = {
+    "szlab_robot_action_workflow": frozenset({7, 8}),
+    "s04_robot_stirring_workflow": frozenset({7, 8}),
+    "s06_robot_workflow": frozenset({11, 12}),
+    "s07_robot_workflow": frozenset({13, 15, 16}),
+}
+ALL_ROBOT_TASKS = frozenset({7, 8, 11, 12, 13, 15, 16})
+
 ROBOT_ACTION_BY_TASK = {
     7: SUPPORTED_ACTIONS[0],
     8: SUPPORTED_ACTIONS[2],
@@ -178,6 +219,38 @@ def s08_cap_cache(slot: int, index: int) -> str:
     return f"S082_{int(slot)}数据缓存[{int(index)}]"
 
 
+def workflow_components(workflow: str) -> frozenset[str]:
+    workflow = str(workflow or "all")
+    if workflow == "all":
+        return ALL_COMPONENTS
+    try:
+        return WORKFLOW_COMPONENTS[workflow]
+    except KeyError as exc:
+        raise ValueError(f"不支持的握手工作流: {workflow}") from exc
+
+
+def workflow_robot_tasks(workflow: str) -> frozenset[int]:
+    workflow = str(workflow or "all")
+    if workflow == "all":
+        return ALL_ROBOT_TASKS
+    if workflow not in WORKFLOW_COMPONENTS:
+        raise ValueError(f"不支持的握手工作流: {workflow}")
+    return WORKFLOW_ROBOT_TASKS.get(workflow, frozenset())
+
+
+def workflow_s04_positions(workflow: str, position: int) -> frozenset[int]:
+    position = int(position)
+    if position not in range(1, 7):
+        raise ValueError("position 必须在 1-6 范围内")
+    if workflow == "all":
+        return frozenset(range(1, 7))
+    components = workflow_components(workflow)
+    robot_tasks = workflow_robot_tasks(workflow)
+    if "s04" in components or robot_tasks.intersection({7, 8}):
+        return frozenset({position})
+    return frozenset()
+
+
 @dataclass
 class CycleState:
     phase: Literal["idle", "executing", "await_reset"] = "idle"
@@ -196,47 +269,77 @@ class HandshakeEvent:
 
 def default_initial_values(
     *,
+    workflow: str = "all",
+    position: int = 1,
     pump: int = 1,
     s06_robot_workflow: bool = False,
     s09_pipetting_workflow: bool = True,
     s09_remaining_volume_ml: float = 100.0,
 ) -> Dict[str, Any]:
     """返回仿真器拥有的 PLC 输出初值，不覆盖 PC 侧输入参数。"""
+    components = set(workflow_components(workflow))
+    robot_tasks = workflow_robot_tasks(workflow)
+    s04_positions = workflow_s04_positions(workflow, position)
     if int(pump) not in (1, 2, 3):
         raise ValueError("pump 必须是 1、2 或 3")
-    if s09_pipetting_workflow and float(s09_remaining_volume_ml) <= 0:
+    if workflow == "all" and not s09_pipetting_workflow:
+        components.discard("s09")
+    if "s09" in components and float(s09_remaining_volume_ml) <= 0:
         raise ValueError("S09 初始液体余量必须大于 0 mL")
 
-    values: Dict[str, Any] = {
-        ROBOT_HOME: True,
-        ROBOT_WRITE_ALLOWED: True,
-        ROBOT_WRITE_DONE: False,
-        ROBOT_TASK_COMPLETE: 0,
-        S05_DONE: True,
-        S05_RESULT: 1,
-        S06_READY: True,
-        S06_ALLOW: True,
-        S06_DONE: False,
-        S06_BEAKER_SENSOR: not bool(s06_robot_workflow),
-        S07_HOME: True,
-        S07_ALLOW: True,
-        S07_DONE: 0,
-        S08_HOME: True,
-        S08_ALLOW: True,
-        S08_DONE: 0,
-        S08_STATION_STATUS: 2,
-        S072_SENSOR_BY_POSITION[1]: False,
-    }
-    for position in range(1, 7):
-        values[s04_sensor(position)] = False
-        values[s04_allow(position)] = True
-        values[s04_done(position)] = False
-        values[S071_SENSOR_BY_SLOT[position]] = False
-    for bottle in ((1, 2) if int(pump) == 3 else (int(pump),)):
-        values[S06_STORAGE_BOTTLE_SENSOR[bottle]] = True
-    for index in range(30):
-        values[s08_cap_cache(1, index)] = 0
-    if s09_pipetting_workflow:
+    values: Dict[str, Any] = {}
+    if "robot" in components:
+        values.update(
+            {
+                ROBOT_HOME: True,
+                ROBOT_WRITE_ALLOWED: True,
+                ROBOT_WRITE_DONE: False,
+                ROBOT_TASK_COMPLETE: 0,
+            }
+        )
+    if robot_tasks.intersection({7, 8}):
+        for s04_position in s04_positions:
+            values[s04_sensor(s04_position)] = False
+    if "s04" in components:
+        for s04_position in s04_positions:
+            values.update(
+                {
+                    s04_allow(s04_position): True,
+                    s04_done(s04_position): False,
+                }
+            )
+    if "photo" in components:
+        values.update({S05_DONE: True, S05_RESULT: 1})
+    if "s06" in components:
+        values.update(
+            {
+                S06_READY: True,
+                S06_ALLOW: True,
+                S06_DONE: False,
+                S06_BEAKER_SENSOR: not bool(s06_robot_workflow),
+            }
+        )
+        for bottle in ((1, 2) if int(pump) == 3 else (int(pump),)):
+            values[S06_STORAGE_BOTTLE_SENSOR[bottle]] = True
+    if robot_tasks.intersection({11, 12}):
+        values[S06_BEAKER_SENSOR] = not bool(s06_robot_workflow)
+    if robot_tasks.intersection({13, 15, 16}):
+        for sensor in S071_SENSOR_BY_SLOT.values():
+            values[sensor] = False
+        values[S072_SENSOR_BY_POSITION[1]] = False
+    if "s07" in components:
+        values.update({S07_HOME: True, S07_ALLOW: True, S07_DONE: 0})
+    if "s08" in components:
+        values.update(
+            {
+                S08_HOME: True,
+                S08_ALLOW: True,
+                S08_DONE: 0,
+                S08_STATION_STATUS: 2,
+                **{s08_cap_cache(1, index): 0 for index in range(30)},
+            }
+        )
+    if "s09" in components:
         values.update(
             {
                 S09_STATION_STATUS: 2,
@@ -264,6 +367,8 @@ class SzlabHandshakeSimulator:
         initial_values: Optional[Dict[str, Any]] = None,
         strict: bool = False,
         client: Optional[Client] = None,
+        workflow: str = "all",
+        position: int = 1,
         pump: int = 1,
         s06_robot_workflow: bool = False,
         s09_pipetting_workflow: bool = True,
@@ -276,11 +381,26 @@ class SzlabHandshakeSimulator:
         self.poll_ms = max(5, int(poll_ms))
         self.delays = {str(key): int(value) for key, value in (delays or {}).items()}
         self.strict = bool(strict)
+        self.workflow = str(workflow or "all")
+        self.position = int(position)
         self.pump = int(pump)
-        self.s06_robot_workflow = bool(s06_robot_workflow)
-        self.s09_pipetting_workflow = bool(s09_pipetting_workflow)
+        self.s06_robot_workflow = bool(
+            s06_robot_workflow or self.workflow == "s06_robot_workflow"
+        )
+        self.s09_pipetting_workflow = bool(
+            s09_pipetting_workflow
+            or self.workflow == "szlab_s09_pipetting_workflow"
+        )
+        components = set(workflow_components(self.workflow))
+        if self.workflow == "all" and not self.s09_pipetting_workflow:
+            components.discard("s09")
+        self.enabled_components = frozenset(components)
+        self.enabled_robot_tasks = workflow_robot_tasks(self.workflow)
+        self.s04_positions = workflow_s04_positions(self.workflow, self.position)
         self.s09_remaining_volume_ml = float(s09_remaining_volume_ml)
         defaults = default_initial_values(
+            workflow=self.workflow,
+            position=self.position,
             pump=self.pump,
             s06_robot_workflow=self.s06_robot_workflow,
             s09_pipetting_workflow=self.s09_pipetting_workflow,
@@ -306,50 +426,87 @@ class SzlabHandshakeSimulator:
     @property
     def required_names(self) -> set[str]:
         names = set(self.initial_values)
-        names.update(
-            {
-                ROBOT_HOME,
-                ROBOT_WRITE_ALLOWED,
-                ROBOT_WRITE_DONE,
-                ROBOT_TASK_NUMBER,
-                ROBOT_TASK_COMPLETE,
-                S04_ROBOT_POSITION,
-                S06_READY,
-                S06_ALLOW,
-                S06_PROCESS,
-                S06_PARAMS_WRITTEN,
-                S06_DONE,
-                S06_BEAKER_SENSOR,
-                S071_ROBOT_POSITION,
-                *S071_SENSOR_BY_SLOT.values(),
-                *S072_SENSOR_BY_POSITION.values(),
-                S07_HOME,
-                S07_ALLOW,
-                S07_PROCESS,
-                S07_PARAMS_WRITTEN,
-                S07_DONE,
-                S08_HOME,
-                S08_ALLOW,
-                S08_PROCESS,
-                S08_PARAMS_WRITTEN,
-                S08_DONE,
-                S08_CAP_STORAGE_SLOT,
-                S08_STATION_STATUS,
-                S09_PROCESS,
-                S09_PARAMS_WRITTEN,
-                S09_DONE,
-                S09_ALLOW,
-                S09_STATION_STATUS,
-            }
-        )
-        for position in range(1, 7):
+        components = set(self.enabled_components)
+        if self.workflow == "all" and not self.s09_pipetting_workflow:
+            components.discard("s09")
+        if "robot" in components:
             names.update(
                 {
-                    s04_sensor(position),
-                    s04_allow(position),
-                    s04_process(position),
-                    s04_params_written(position),
-                    s04_done(position),
+                    ROBOT_HOME,
+                    ROBOT_WRITE_ALLOWED,
+                    ROBOT_WRITE_DONE,
+                    ROBOT_TASK_NUMBER,
+                    ROBOT_TASK_COMPLETE,
+                }
+            )
+            if self.enabled_robot_tasks.intersection({7, 8}):
+                names.add(S04_ROBOT_POSITION)
+                names.update(s04_sensor(item) for item in self.s04_positions)
+            if self.enabled_robot_tasks.intersection({11, 12}):
+                names.add(S06_BEAKER_SENSOR)
+            if 13 in self.enabled_robot_tasks:
+                names.add(S071_ROBOT_POSITION)
+                names.update(S071_SENSOR_BY_SLOT.values())
+            if self.enabled_robot_tasks.intersection({15, 16}):
+                names.add(S072_SENSOR_BY_POSITION[1])
+        if "s04" in components:
+            for s04_position in self.s04_positions:
+                names.update(
+                    {
+                        s04_allow(s04_position),
+                        s04_process(s04_position),
+                        s04_params_written(s04_position),
+                        s04_done(s04_position),
+                    }
+                )
+        if "s06" in components:
+            names.update(
+                {
+                    S06_READY,
+                    S06_ALLOW,
+                    S06_PROCESS,
+                    S06_PARAMS_WRITTEN,
+                    S06_DONE,
+                    S06_BEAKER_SENSOR,
+                }
+            )
+        if "s07" in components:
+            names.update(
+                {
+                    S07_HOME,
+                    S07_ALLOW,
+                    S07_PROCESS,
+                    S07_PARAMS_WRITTEN,
+                    S07_DONE,
+                }
+            )
+        if "s08" in components:
+            names.update(
+                {
+                    S08_HOME,
+                    S08_ALLOW,
+                    S08_PROCESS,
+                    S08_PARAMS_WRITTEN,
+                    S08_DONE,
+                    S08_CAP_STORAGE_SLOT,
+                    S08_STATION_STATUS,
+                }
+            )
+        if "s09" in components:
+            names.update(
+                {
+                    S09_PROCESS,
+                    S09_PARAMS_WRITTEN,
+                    S09_DONE,
+                    S09_ALLOW,
+                    S09_STATION_STATUS,
+                }
+            )
+        if "photo" in components:
+            names.update(
+                {
+                    S05_DONE,
+                    S05_RESULT,
                 }
             )
         return names
@@ -371,8 +528,9 @@ class SzlabHandshakeSimulator:
         self._resolve_nodes()
         self._prepare_capabilities()
         log.info(
-            "已连接 %s，解析节点 %d 个，启用工站：%s",
+            "已连接 %s，工作流=%s，解析节点 %d 个，启用工站：%s",
             self.url,
+            self.workflow,
             len(self.nodes),
             ", ".join(sorted(self.enabled_groups)) or "无",
         )
@@ -424,6 +582,9 @@ class SzlabHandshakeSimulator:
     def _prepare_capabilities(self) -> None:
         self.enabled_groups.clear()
         self.enabled_s04_positions.clear()
+        components = set(self.enabled_components)
+        if self.workflow == "all" and not self.s09_pipetting_workflow:
+            components.discard("s09")
         groups: Dict[str, Iterable[str]] = {
             "robot": (
                 ROBOT_HOME,
@@ -442,10 +603,11 @@ class SzlabHandshakeSimulator:
                 S08_CAP_STORAGE_SLOT,
             ),
             "s09": (S09_ALLOW, S09_PROCESS, S09_PARAMS_WRITTEN, S09_DONE),
+            "photo": (S05_DONE, S05_RESULT),
         }
         missing_messages: list[str] = []
         for group, needed in groups.items():
-            if group == "s09" and not self.s09_pipetting_workflow:
+            if group not in components:
                 continue
             missing = [name for name in needed if name not in self.nodes]
             if missing:
@@ -453,7 +615,7 @@ class SzlabHandshakeSimulator:
             else:
                 self.enabled_groups.add(group)
 
-        for position in range(1, 7):
+        for position in sorted(self.s04_positions if "s04" in components else ()):
             needed = (
                 s04_allow(position),
                 s04_process(position),
@@ -496,6 +658,8 @@ class SzlabHandshakeSimulator:
 
     def _cleanup_values(self) -> Dict[str, Any]:
         owned_values = default_initial_values(
+            workflow=self.workflow,
+            position=self.position,
             pump=self.pump,
             s06_robot_workflow=self.s06_robot_workflow,
             s09_pipetting_workflow=self.s09_pipetting_workflow,
@@ -630,13 +794,15 @@ class SzlabHandshakeSimulator:
         return events
 
     def _robot_target(self, task: int) -> Optional[tuple[int, str]]:
+        if task not in self.enabled_robot_tasks:
+            return None
         position = 0
         sensor = ""
         if task in (7, 8):
             if S04_ROBOT_POSITION not in self.nodes:
                 return None
             position = int(self._read(S04_ROBOT_POSITION) or 0)
-            if position not in range(1, 7):
+            if position not in self.s04_positions:
                 return None
             sensor = s04_sensor(position)
         elif task in (11, 12):
@@ -907,7 +1073,11 @@ class SzlabHandshakeSimulator:
         if warning in self._warned_inputs:
             return
         self._warned_inputs.add(warning)
-        log.warning("%s 收到无法执行的值 %s：位置无效或对应传感器节点缺失", group, value)
+        log.warning(
+            "%s 收到无法执行的值 %s：当前工作流未启用、位置无效或对应传感器节点缺失",
+            group,
+            value,
+        )
 
     def _read(self, name: str) -> Any:
         return self.nodes[name].get_value()
@@ -948,7 +1118,7 @@ def _config_path() -> str:
     return str(Path(__file__).with_name("config") / "szlab_handshake.yaml")
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SZLab Poly Studio OPC UA 握手仿真驱动")
     parser.add_argument(
         "--url",
@@ -961,6 +1131,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--delay-ms", type=int, default=None)
     parser.add_argument("--poll-ms", type=int, default=None)
     parser.add_argument("--connect-timeout", type=float, default=15.0)
+    parser.add_argument(
+        "--workflow",
+        choices=("all", *WORKFLOW_IDS),
+        default=None,
+        help="只启用指定工作流所需的节点、初值和握手状态机",
+    )
+    parser.add_argument(
+        "--position",
+        type=int,
+        choices=range(1, 7),
+        default=None,
+        help="S04 调试位置，1-6",
+    )
     parser.add_argument("--pump", type=int, choices=(1, 2, 3), default=None)
     parser.add_argument(
         "--s06-robot-workflow",
@@ -983,7 +1166,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="正常退出时清理仿真器拥有的 PLC 输出",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def _config_bool(
@@ -1004,9 +1187,17 @@ def main() -> int:
         node_prefix=args.node_prefix,
         delay_ms=args.delay_ms if args.delay_ms is not None else int(config.get("delay_ms", 120)),
         poll_ms=args.poll_ms if args.poll_ms is not None else int(config.get("poll_ms", 20)),
-        delays=dict(config.get("delays", {})),
+        # 显式全局延时用于交互式调试时，应覆盖 YAML 的分组延时；否则 UI 中
+        # 修改 delay_ms 会被 robot/s04/... 的旧值悄悄遮蔽。
+        delays={} if args.delay_ms is not None else dict(config.get("delays", {})),
         initial_values=dict(config.get("initial_values", {})),
         strict=args.strict,
+        workflow=args.workflow or str(config.get("workflow", "all")),
+        position=(
+            args.position
+            if args.position is not None
+            else int(config.get("position", 1))
+        ),
         pump=args.pump if args.pump is not None else int(config.get("pump", 1)),
         s06_robot_workflow=_config_bool(
             args.s06_robot_workflow,

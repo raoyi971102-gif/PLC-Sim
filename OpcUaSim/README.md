@@ -155,12 +155,40 @@ start_szlab_handshake.bat opc.tcp://127.0.0.1:4855/xuse_sim/
 ```
 
 GUI 的“握手代理”中可将“仿真协议”切换为 `SZLab Poly Studio`。
+切换后会显示“工作流调试参数”，可从 Uni-Lab-SZLab 当前 12 个工作流中
+选择一个定向调试。代理只解析、初始化和轮询该工作流实际使用的节点；选择
+“全部工作流”时保持原有的全工位兼容模式。
+
+命令行也支持同样的选择和参数覆盖：
+
+```bash
+python szlab_handshake_agent.py \
+  --workflow s04_robot_stirring_workflow \
+  --position 2 \
+  --pump 1 \
+  --delay-ms 250 \
+  --poll-ms 40 \
+  --s09-remaining-volume-ml 100
+```
+
+| 参数 | 用途 |
+|---|---|
+| `--workflow` | `all` 或 12 个 SZLab 工作流 ID 之一 |
+| `--position` | S04 调试位置，范围 `1-6` |
+| `--pump` | S06 储液瓶，`1`、`2` 或 `3`（双泵） |
+| `--delay-ms` | 统一覆盖各工位从接单到完成的动作延时；不传时使用 YAML 分组值 |
+| `--poll-ms` | OPC UA 轮询间隔，最小 5 ms |
+| `--s09-remaining-volume-ml` | S09 1-5 号液体瓶的初始余量 |
+
 仿真驱动优先使用实机格式
 `ns=4;s=上位机通讯|<变量名>`，找不到时按 BrowseName 递归匹配。
 缺失某个工位节点时默认只跳过该工位；命令行增加 `--strict` 可改为立即报错。
 
-延时、工作流和 PLC 侧初始值位于 `config/szlab_handshake.yaml`：
+延时、工作流和 PLC 侧初始值位于 `config/szlab_handshake.yaml`。命令行或 GUI
+显式参数优先于该配置：
 
+- `workflow`：`all` 或指定工作流 ID；
+- `position`：S04 定向调试位置；
 - `pump`：初始化为在位的 S06 储液瓶，取值 `1`、`2` 或 `3`（两瓶）；
 - `s06_robot_workflow`：启用后，S06 烧杯传感器由机器人任务 `11/12` 放置和取走；
 - `s09_pipetting_workflow`：初始化 S09 工位、液体余量并响应全部内部工艺；

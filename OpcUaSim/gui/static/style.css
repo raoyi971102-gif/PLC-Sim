@@ -434,6 +434,30 @@ tbody tr:hover td { background: rgba(45, 212, 191, 0.025); }
 .service-card { display: flex; flex-direction: column; }
 .service-card .form-grid { flex: 1; }
 .compact-switch { margin-top: 14px; padding: 10px 12px; }
+.agent-options {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+.agent-options summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  color: #c9d7df;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+.agent-options summary small {
+  color: #78909f;
+  font-size: 11px;
+  font-weight: 400;
+  text-align: right;
+}
+.agent-options[open] summary { margin-bottom: 14px; }
+.agent-options-grid { padding-left: 14px; }
 .card-actions { margin-top: 18px; justify-content: flex-end; }
 .connection-card {
   border-color: rgba(96, 165, 250, .2);

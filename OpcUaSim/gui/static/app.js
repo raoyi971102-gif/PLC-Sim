@@ -5,7 +5,7 @@
 
 // 版本 marker —— F12 Console 里能看到. 如果你看到的是旧样式但这一行没打印,
 // 说明你的浏览器根本没执行这份 app.js (纯缓存旧文件).
-const GUI_BUILD = "2026-07-30_connections-csv-monitors";
+const GUI_BUILD = "2026-07-31_szlab-workflow-debug";
 console.log("%c[OpcUaSim] GUI build " + GUI_BUILD, "color:#3ecf8e;font-weight:bold");
 
 const $ = (id) => document.getElementById(id);
@@ -172,6 +172,7 @@ function renderState(s) {
   $("btnServerStop").disabled = !!s.busy || s.server.stopping || !s.server.running || s.server.attached;
   $("btnAgentStart").disabled = !!s.busy || s.agent.running || s.agent.stopping;
   $("btnAgentStop").disabled = !!s.busy || s.agent.stopping || !s.agent.running || s.agent.attached;
+  setAgentFormDisabled(s.agent.running || s.agent.stopping);
   $("btnClose").disabled = !!s.busy || !s.project;
   updateVariableControls();
 
@@ -514,16 +515,95 @@ $("btnServerStop").onclick = () => stopManagedProcess(
   $("btnServerStop"), "/api/server/stop"
 );
 
+const SZLAB_S04_WORKFLOWS = new Set([
+  "szlab_magnetic_stirring_workflow",
+  "szlab_robot_action_workflow",
+  "s04_robot_stirring_workflow",
+]);
+const SZLAB_PUMP_WORKFLOWS = new Set([
+  "all",
+  "s06_robot_workflow",
+  "szlab_stack_s05_s06_workflow",
+  "szlab_mixer_workflow",
+  "szlab_mixer_pump_production",
+]);
+
+function syncSzlabAgentOptions() {
+  const szlab = $("agentProfile").value === "szlab";
+  $("szlabAgentOptions").classList.toggle("hidden", !szlab);
+  if (!szlab) return;
+
+  const workflow = $("agentWorkflow").value;
+  $("agentPositionField").classList.toggle(
+    "hidden", !SZLAB_S04_WORKFLOWS.has(workflow)
+  );
+  $("agentPumpField").classList.toggle(
+    "hidden", !SZLAB_PUMP_WORKFLOWS.has(workflow)
+  );
+  $("agentS09VolumeField").classList.toggle(
+    "hidden", workflow !== "all" && workflow !== "szlab_s09_pipetting_workflow"
+  );
+  $("agentDelayField").classList.toggle(
+    "hidden", workflow === "szlab_photoshotting_workflow"
+  );
+}
+
+function setAgentFormDisabled(disabled) {
+  for (const id of [
+    "agentProfile", "agentCsv", "agentHost", "agentPort", "agentCfg",
+    "agentWorkflow", "agentPosition", "agentPump", "agentDelayMs",
+    "agentPollMs", "agentS09Volume",
+  ]) {
+    $(id).disabled = disabled;
+  }
+}
+
+function readAgentNumber(id, label, min, max, integer = false) {
+  const raw = $(id).value.trim();
+  const value = Number(raw);
+  if (!raw || !Number.isFinite(value) || value < min || value > max) {
+    throw new Error(`${label}必须在 ${min} 到 ${max} 之间`);
+  }
+  if (integer && !Number.isInteger(value)) {
+    throw new Error(`${label}必须是整数`);
+  }
+  return value;
+}
+
 $("btnAgentStart").onclick = async () => {
   try {
-    const r = await post("/api/agent/start", {
+    const szlab = $("agentProfile").value === "szlab";
+    const body = {
       profile: $("agentProfile").value,
       host: $("agentHost").value.trim() || "127.0.0.1",
       port: parseInt($("agentPort").value, 10) || 4855,
       config: $("agentCfg").value.trim() || null,
       csv: $("agentCsv").value.trim() || $("simCsv").value.trim() || null,
-    }, 10000);
-    console.log("agent started pid=", r.pid);
+    };
+    if (szlab) {
+      const workflow = $("agentWorkflow").value;
+      body.workflow = workflow;
+      body.poll_ms = readAgentNumber("agentPollMs", "轮询间隔", 5, 60000, true);
+      if (
+        workflow !== "szlab_photoshotting_workflow" &&
+        $("agentDelayMs").value.trim()
+      ) {
+        body.delay_ms = readAgentNumber("agentDelayMs", "动作延时", 0, 3600000, true);
+      }
+      if (SZLAB_S04_WORKFLOWS.has(workflow)) {
+        body.position = readAgentNumber("agentPosition", "S04 位置", 1, 6, true);
+      }
+      if (SZLAB_PUMP_WORKFLOWS.has(workflow)) {
+        body.pump = readAgentNumber("agentPump", "储液泵", 1, 3, true);
+      }
+      if (workflow === "all" || workflow === "szlab_s09_pipetting_workflow") {
+        body.s09_remaining_volume_ml = readAgentNumber(
+          "agentS09Volume", "S09 初始余量", 0.1, Number.MAX_SAFE_INTEGER
+        );
+      }
+    }
+    const r = await post("/api/agent/start", body, 10000);
+    console.log("agent started pid=", r.pid, "options=", r.options || {});
     await refreshState();
   } catch (e) { alert(e.message); }
 };
@@ -532,7 +612,10 @@ $("agentProfile").onchange = () => {
   $("agentCfg").value = szlab
     ? "config/szlab_handshake.yaml"
     : "config/xuse_handshake.yaml";
+  syncSzlabAgentOptions();
 };
+$("agentWorkflow").onchange = syncSzlabAgentOptions;
+syncSzlabAgentOptions();
 $("btnAgentStop").onclick = () => stopManagedProcess(
   $("btnAgentStop"), "/api/agent/stop"
 );

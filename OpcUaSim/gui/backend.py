@@ -36,7 +36,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from opcua import Client, ua
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # 允许直接 `python -m gui.backend` 时找到根包
 _ROOT = Path(__file__).resolve().parent.parent
@@ -64,6 +64,24 @@ from ino_mcp.extractor import (
     build_dut_registry_from_dump,
     build_dut_registry_from_warm,
     parse_warm_dump,
+)
+
+
+# 保持 GUI 后端启动契约不依赖可执行 Agent 模块，避免导入时初始化 Agent logger。
+# tests/test_gui_agent_config.py 会校验这里、Agent 和 HTML 三处目录完全一致。
+SZLAB_WORKFLOW_IDS = (
+    "szlab_magnetic_stirring_workflow",
+    "szlab_photoshotting_workflow",
+    "szlab_robot_action_workflow",
+    "s04_robot_stirring_workflow",
+    "s06_robot_workflow",
+    "s07_robot_workflow",
+    "szlab_s07_solid_addition_workflow",
+    "s08_cap_workflow",
+    "szlab_s09_pipetting_workflow",
+    "szlab_stack_s05_s06_workflow",
+    "szlab_mixer_workflow",
+    "szlab_mixer_pump_production",
 )
 
 
@@ -1279,6 +1297,36 @@ class AgentStartReq(BaseModel):
     config: Optional[str] = None      # 可选 yaml
     csv: Optional[str] = None
     profile: str = "xuse"
+    workflow: Optional[str] = None
+    position: Optional[int] = Field(default=None, ge=1, le=6)
+    pump: Optional[int] = Field(default=None, ge=1, le=3)
+    delay_ms: Optional[int] = Field(default=None, ge=0, le=3_600_000)
+    poll_ms: Optional[int] = Field(default=None, ge=5, le=60_000)
+    s09_remaining_volume_ml: Optional[float] = Field(default=None, gt=0)
+
+
+def _extend_szlab_command(cmd: List[str], req: AgentStartReq) -> Dict[str, Any]:
+    """校验并附加 SZLab 工作流调试参数，返回实际生效的显式覆盖项。"""
+    options: Dict[str, Any] = {}
+    if req.workflow:
+        if req.workflow not in ("all", *SZLAB_WORKFLOW_IDS):
+            raise HTTPException(400, f"未知 SZLab 工作流: {req.workflow}")
+        options["workflow"] = req.workflow
+        cmd.extend(["--workflow", req.workflow])
+
+    option_specs = (
+        ("position", "--position"),
+        ("pump", "--pump"),
+        ("delay_ms", "--delay-ms"),
+        ("poll_ms", "--poll-ms"),
+        ("s09_remaining_volume_ml", "--s09-remaining-volume-ml"),
+    )
+    for field_name, flag in option_specs:
+        value = getattr(req, field_name)
+        if value is not None:
+            options[field_name] = value
+            cmd.extend([flag, str(value)])
+    return options
 
 
 @app.post("/api/agent/start")
@@ -1290,11 +1338,13 @@ async def api_agent_start(req: AgentStartReq) -> Dict[str, Any]:
     py = _find_python_exe()
     url = f"opc.tcp://{req.host}:{req.port}/xuse_sim/"
     profile = req.profile.strip().lower()
+    options: Dict[str, Any] = {}
     if profile == "szlab":
         agent_py = _ROOT / "szlab_handshake_agent.py"
         cmd = [py, str(agent_py), "--url", url]
         if req.config:
             cmd.extend(["--config", req.config])
+        options = _extend_szlab_command(cmd, req)
     elif profile == "xuse":
         agent_py = _ROOT / "handshake_agent.py"
         cmd = [py, str(agent_py), "--url", url]
@@ -1313,7 +1363,12 @@ async def api_agent_start(req: AgentStartReq) -> Dict[str, Any]:
     _pipe_to_logger(proc, "agent")
     _STATE.agent_proc = proc
     await asyncio.sleep(0.3)
-    return {"ok": True, "pid": proc.pid, "profile": profile}
+    return {
+        "ok": True,
+        "pid": proc.pid,
+        "profile": profile,
+        "options": options,
+    }
 
 
 @app.post("/api/agent/stop")

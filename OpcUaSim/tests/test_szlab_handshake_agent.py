@@ -17,7 +17,11 @@ from szlab_handshake_agent import (
     S09_PARAMS_WRITTEN,
     S09_PROCESS,
     SUPPORTED_ACTIONS,
+    WORKFLOW_IDS,
     SzlabHandshakeSimulator,
+    parse_args,
+    s04_allow,
+    s04_done,
     s04_params_written,
     s04_process,
     s04_sensor,
@@ -72,6 +76,7 @@ def reset_robot(
 
 def test_protocol_catalog_matches_reference_handshaker():
     assert len(SUPPORTED_ACTIONS) == 19
+    assert len(WORKFLOW_IDS) == 12
     assert set(ROBOT_ACTION_BY_TASK) == {7, 8, 11, 12, 13, 15, 16}
     simulator, nodes = make_simulator()
     assert nodes["Robot_任务写入完成"].value is False
@@ -96,6 +101,86 @@ def test_robot_s04_place_and_pick_update_sensor_and_reset_with_retained_task():
     run_robot_task(simulator, nodes, task=8, started_at=1.2)
     assert nodes["Robot_任务完成"].value == 8
     assert nodes[s04_sensor(2)].value is False
+
+
+def test_selected_workflow_limits_nodes_initialization_and_polling():
+    simulator = SzlabHandshakeSimulator(
+        "opc.tcp://unused",
+        workflow="szlab_magnetic_stirring_workflow",
+        position=4,
+    )
+
+    assert simulator.enabled_components == frozenset({"s04"})
+    assert simulator.enabled_robot_tasks == frozenset()
+    assert simulator.s04_positions == frozenset({4})
+    assert simulator.initial_values == {
+        s04_allow(4): True,
+        s04_done(4): False,
+    }
+    assert simulator.required_names == {
+        s04_allow(4),
+        s04_process(4),
+        s04_params_written(4),
+        s04_done(4),
+    }
+
+    simulator.nodes = {name: FakeNode(0) for name in simulator.required_names}
+    simulator._prepare_capabilities()
+    simulator.initialize()
+    assert simulator.enabled_groups == {"s04"}
+    assert simulator.enabled_s04_positions == {4}
+
+
+def test_selected_robot_workflow_ignores_other_workflow_tasks():
+    simulator = SzlabHandshakeSimulator(
+        "opc.tcp://unused",
+        workflow="s06_robot_workflow",
+        delay_ms=0,
+    )
+    simulator.nodes = {name: FakeNode(0) for name in simulator.required_names}
+    simulator._prepare_capabilities()
+    simulator.initialize()
+
+    assert simulator.enabled_robot_tasks == frozenset({11, 12})
+    assert simulator.s06_robot_workflow is True
+    assert simulator.nodes[S06_BEAKER_SENSOR].value is False
+
+    simulator.nodes["任务号"].value = 7
+    simulator.nodes["Robot_任务写入完成"].value = True
+    assert simulator.tick(now=1.0) == []
+    assert simulator.nodes["Robot_任务允许写入"].value is True
+
+    simulator.nodes["任务号"].value = 11
+    accepted = simulator.tick(now=1.1)
+    assert [(event.details["task_number"], event.phase) for event in accepted] == [
+        (11, "accepted")
+    ]
+
+
+def test_cli_accepts_workflow_debug_parameters():
+    args = parse_args(
+        [
+            "--workflow",
+            "s04_robot_stirring_workflow",
+            "--position",
+            "5",
+            "--pump",
+            "3",
+            "--delay-ms",
+            "250",
+            "--poll-ms",
+            "40",
+            "--s09-remaining-volume-ml",
+            "88.5",
+        ]
+    )
+
+    assert args.workflow == "s04_robot_stirring_workflow"
+    assert args.position == 5
+    assert args.pump == 3
+    assert args.delay_ms == 250
+    assert args.poll_ms == 40
+    assert args.s09_remaining_volume_ml == 88.5
 
 
 def test_s06_robot_place_pick_and_process_reset_with_selector_retained():

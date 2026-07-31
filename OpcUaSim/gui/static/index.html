@@ -319,6 +319,57 @@
               <span>代理配置</span>
               <input id="agentCfg" value="config/xuse_handshake.yaml">
             </label>
+            <details id="szlabAgentOptions" class="agent-options full hidden" open>
+              <summary>
+                <span>SZLab 工作流调试参数</span>
+                <small>仅初始化并响应所选工作流；参数在下次启动时生效</small>
+              </summary>
+              <div class="form-grid agent-options-grid">
+                <label class="field full">
+                  <span>调试工作流</span>
+                  <select id="agentWorkflow">
+                    <option value="all">全部工作流（兼容模式）</option>
+                    <option value="szlab_magnetic_stirring_workflow">S04 磁力搅拌</option>
+                    <option value="szlab_photoshotting_workflow">S05 拍照</option>
+                    <option value="szlab_robot_action_workflow">S04 机器人取放料</option>
+                    <option value="s04_robot_stirring_workflow">S04 机器人取放料 + 搅拌</option>
+                    <option value="s06_robot_workflow">S06 机器人取放料 + 加液</option>
+                    <option value="s07_robot_workflow">S07 机器人粉罐与产品转运</option>
+                    <option value="szlab_s07_solid_addition_workflow">S07 固体加样</option>
+                    <option value="s08_cap_workflow">S08 开关盖</option>
+                    <option value="szlab_s09_pipetting_workflow">S09 移液</option>
+                    <option value="szlab_stack_s05_s06_workflow">S05 + S06 堆栈联调</option>
+                    <option value="szlab_mixer_workflow">混配加液</option>
+                    <option value="szlab_mixer_pump_production">加液生产流程</option>
+                  </select>
+                </label>
+                <label class="field" id="agentPositionField">
+                  <span>S04 位置 <em>1-6</em></span>
+                  <input id="agentPosition" type="number" value="1" min="1" max="6" step="1">
+                </label>
+                <label class="field" id="agentPumpField">
+                  <span>储液泵 <em>3 = 双泵</em></span>
+                  <select id="agentPump">
+                    <option value="1">1 号储液瓶</option>
+                    <option value="2">2 号储液瓶</option>
+                    <option value="3">1 + 2 号储液瓶</option>
+                  </select>
+                </label>
+                <label class="field" id="agentDelayField">
+                  <span>统一动作延时 <em>ms，可选</em></span>
+                  <input id="agentDelayMs" type="number" min="0" max="3600000" step="10"
+                         placeholder="留空使用 YAML 分组延时">
+                </label>
+                <label class="field">
+                  <span>轮询间隔 <em>ms</em></span>
+                  <input id="agentPollMs" type="number" value="20" min="5" max="60000" step="5">
+                </label>
+                <label class="field full" id="agentS09VolumeField">
+                  <span>S09 液体瓶初始余量 <em>mL</em></span>
+                  <input id="agentS09Volume" type="number" value="100" min="0.1" step="0.1">
+                </label>
+              </div>
+            </details>
           </div>
           <div class="card-actions">
             <button id="btnAgentStop" class="btn danger" disabled>停止代理</button>
