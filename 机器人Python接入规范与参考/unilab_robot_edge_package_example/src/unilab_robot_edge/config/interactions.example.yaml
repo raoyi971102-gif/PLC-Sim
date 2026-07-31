@@ -1,0 +1,55 @@
+schema_version: 1
+protocol_version: unilab.robot/v1
+
+payload_profiles:
+  rack:
+    profile_id: payload.rack.empty.v1
+  sample_rack:
+    profile_id: payload.rack.loaded.v1
+
+bindings:
+  collector-warehouse/site-01/pick:
+    operation: pick
+    mount_resource_id: collector-warehouse
+    site: site-01
+    allowed_resource_types: [rack, sample_rack]
+    skill_id: rack.pick.storage
+    program_version: fairino-rack-pick@1
+    point_set_version: ptlc-cell@2026-07-31
+    tool_profile: rack-gripper@1
+    parameter_rules:
+      vision_dx_mm: {type: number, minimum: -2.0, maximum: 2.0}
+      vision_dy_mm: {type: number, minimum: -2.0, maximum: 2.0}
+      vision_drz_deg: {type: number, minimum: -1.0, maximum: 1.0}
+
+  staging-a/rack-site/place:
+    operation: place
+    mount_resource_id: staging-a
+    site: rack-site
+    allowed_resource_types: [rack, sample_rack]
+    skill_id: rack.place.staging
+    program_version: fairino-rack-place@1
+    point_set_version: ptlc-cell@2026-07-31
+    tool_profile: rack-gripper@1
+    parameter_rules: {}
+  staging-a/rack-site/pick:
+    operation: pick
+    mount_resource_id: staging-a
+    site: rack-site
+    allowed_resource_types: [rack, sample_rack]
+    skill_id: rack.pick.staging
+    program_version: fairino-rack-pick-staging@1
+    point_set_version: ptlc-cell@2026-07-31
+    tool_profile: rack-gripper@1
+    parameter_rules: {}
+
+  collector-warehouse/site-01/place:
+    operation: place
+    mount_resource_id: collector-warehouse
+    site: site-01
+    allowed_resource_types: [rack, sample_rack]
+    skill_id: rack.place.storage
+    program_version: fairino-rack-place-storage@1
+    point_set_version: ptlc-cell@2026-07-31
+    tool_profile: rack-gripper@1
+    parameter_rules: {}

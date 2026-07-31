@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unilab-robot-edge-example"
+version = "0.1.0"
+description = "Fail-closed Uni-Lab edge Profile package example for robot arms"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "Proprietary"}
+dependencies = [
+  "PyYAML>=6.0",
+]
+
+[project.entry-points."unilabos.drivers"]
+unilab_robot_edge = "unilab_robot_edge.driver:RobotEdgeDriver"
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+unilab_robot_edge = ["config/*.yaml", "profile/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

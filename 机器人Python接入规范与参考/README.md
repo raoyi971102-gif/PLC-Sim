@@ -279,3 +279,20 @@ python 机器人Python接入规范与参考\siasun_duco_example.py
 ```powershell
 pip install -e pTLC_platformUI\pTLC_platformUI
 ```
+
+## 11. Uni-Lab Edge 设备包示例
+
+本目录新增了
+[`unilab_robot_edge_package_example`](unilab_robot_edge_package_example/README.md)，
+用于把本规范和厂家客户端收敛成当前 Uni-Lab 的
+`ProfileV1 + DeviceSpecV2 + unilabos.drivers` 设备包形态。
+
+该示例包含：
+
+- 可安装的 driver entry point；
+- `package.yaml`、`device.yaml` 和 edge 配置示例；
+- Resource/Site 到 Interaction Profile 的生产动作解析；
+- Commissioning Session 与命名点调试动作；
+- SQLite 幂等日志、Motion Permit、受控停止和 `UNKNOWN` 对账；
+- 不连接真机的模拟 connection 和测试；
+- [完整机械臂设备包规范](unilab_robot_edge_package_example/docs/机械臂设备包规范.md)。

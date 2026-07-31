@@ -1,0 +1,33 @@
+schema_version: 1
+point_set:
+  point_set_id: ptlc-cell
+  version: ptlc-cell@2026-07-31
+  robot_model: FAIRINO-FR5
+  robot_serial: replace-with-site-serial
+  controller_version: replace-with-site-version
+  calibration_version: ptlc-cell-calibration@1
+  approved: false
+
+points:
+  commissioning.safe-a:
+    vendor_name: P_TEST_A
+    validation_status: draft
+    pose: [400.0, 0.0, 350.0, 180.0, 0.0, 0.0]
+    joint: [0.0, -30.0, -100.0, 0.0, 90.0, 0.0]
+    pose_unit: mm_deg
+    joint_unit: deg
+    user_frame: 0
+    tool_frame: 1
+    allowed_motion: [move_j]
+    max_speed_percent: 5
+  commissioning.safe-b:
+    vendor_name: P_TEST_B
+    validation_status: draft
+    pose: [420.0, 0.0, 350.0, 180.0, 0.0, 0.0]
+    joint: [2.0, -30.0, -100.0, 0.0, 90.0, 0.0]
+    pose_unit: mm_deg
+    joint_unit: deg
+    user_frame: 0
+    tool_frame: 1
+    allowed_motion: [move_j]
+    max_speed_percent: 5

@@ -1,0 +1,167 @@
+schema_version: 2
+device:
+  id: robot
+  display_name: Uni-Lab 机械臂
+  category: [robot_arm, material_transport]
+
+actions:
+  - id: query_status
+    description: 读取归一化机器人状态、许可摘要和未决命令数；不触发运动。
+    execution_kind: atomic
+    params: []
+    results:
+      - {name: success, type: boolean}
+      - {name: status, type: object}
+      - {name: unresolved_commands, type: integer}
+    material: {mode: none, inputs: [], outputs: []}
+    resource_claims: []
+    timing: {estimated_duration_s: 0.2, timeout_s: 3}
+
+  - id: pick
+    description: 从 Resource 当前父载体/Site 物理取料；不修改 OS 物料归属。
+    execution_kind: device_macro
+    params:
+      - {name: resource, type: object, required: true}
+      - {name: command_id, type: string, required: true}
+      - {name: source_boot_id, type: string, required: true}
+      - {name: monotonic_sequence, type: integer, required: true, minimum: 1}
+      - {name: parameters, type: object, required: false}
+    results:
+      - {name: success, type: boolean}
+      - {name: state, type: string}
+      - {name: command_id, type: string}
+      - {name: witness, type: object}
+    material: {mode: none, inputs: [], outputs: []}
+    resource_claims:
+      - {resource_ref: robot, resource_type: device, selector: bound_device, scope: action, mode: exclusive}
+      - {resource_ref: robot_cell, resource_type: workstation, selector: declared, scope: action, mode: exclusive}
+    timing: {estimated_duration_s: 30, timeout_s: 300}
+    recovery: &physical_recovery
+      idempotency: same_command_id_returns_recorded_state
+      cancel: controlled_stop_then_reconcile
+      timeout: reconcile_required
+      disconnect: reconcile_required
+      estop: needs_drain_and_manual_recovery
+
+  - id: place
+    description: 向目标载体/Site 物理放料；成功后仍须调用 host.transfer_resource 记账。
+    execution_kind: device_macro
+    params:
+      - {name: resource, type: object, required: true}
+      - {name: target_mount_resource, type: object, required: true}
+      - {name: target_site, type: string, required: true}
+      - {name: command_id, type: string, required: true}
+      - {name: source_boot_id, type: string, required: true}
+      - {name: monotonic_sequence, type: integer, required: true, minimum: 1}
+      - {name: parameters, type: object, required: false}
+    results:
+      - {name: success, type: boolean}
+      - {name: state, type: string}
+      - {name: command_id, type: string}
+      - {name: witness, type: object}
+    material: {mode: none, inputs: [], outputs: []}
+    resource_claims:
+      - {resource_ref: robot, resource_type: device, selector: bound_device, scope: action, mode: exclusive}
+      - {resource_ref: robot_cell, resource_type: workstation, selector: declared, scope: action, mode: exclusive}
+    timing: {estimated_duration_s: 30, timeout_s: 300}
+    recovery: *physical_recovery
+
+  - id: get_command
+    description: 查询持久命令记录；不重新下发动作。
+    execution_kind: atomic
+    params:
+      - {name: command_id, type: string, required: true}
+    results:
+      - {name: success, type: boolean}
+      - {name: found, type: boolean}
+      - {name: state, type: string}
+      - {name: command, type: object}
+    material: {mode: none, inputs: [], outputs: []}
+    resource_claims: []
+    timing: {estimated_duration_s: 0.1, timeout_s: 2}
+
+  - id: reconcile
+    description: 使用控制器观测对账 UNKNOWN 命令；绝不重发运动。
+    execution_kind: atomic
+    params:
+      - {name: command_id, type: string, required: true}
+    results:
+      - {name: success, type: boolean}
+      - {name: state, type: string}
+      - {name: command_id, type: string}
+      - {name: witness, type: object}
+    material: {mode: none, inputs: [], outputs: []}
+    resource_claims: []
+    timing: {estimated_duration_s: 1, timeout_s: 10}
+
+  - id: request_controlled_stop
+    description: 请求普通受控停止并确认停稳；不替代急停或安全停机。
+    execution_kind: atomic
+    params:
+      - {name: command_id, type: string, required: true}
+      - {name: reason, type: string, required: true}
+    results:
+      - {name: success, type: boolean}
+      - {name: state, type: string}
+      - {name: command_id, type: string}
+    material: {mode: none, inputs: [], outputs: []}
+    resource_claims: []
+    timing: {estimated_duration_s: 2, timeout_s: 10}
+
+  - id: begin_commissioning
+    description: 冻结一次调试的控制器、点位、标定、工具、负载和外部轴上下文。
+    execution_kind: atomic
+    params:
+      - {name: session_id, type: string, required: true}
+      - {name: point_set_version, type: string, required: true}
+      - {name: calibration_version, type: string, required: true}
+      - {name: tool_profile, type: string, required: true}
+      - {name: payload_profile, type: string, required: true}
+      - {name: external_axis_context, type: object, required: true}
+      - {name: speed_cap_percent, type: number, required: true, minimum: 1, maximum: 20}
+      - {name: expires_in_s, type: integer, required: false, minimum: 60, maximum: 1800}
+    results:
+      - {name: success, type: boolean}
+      - {name: session_id, type: string}
+      - {name: expires_at, type: number}
+      - {name: controller_boot_id, type: string}
+    material: {mode: none, inputs: [], outputs: []}
+    resource_claims:
+      - {resource_ref: robot, resource_type: device, selector: bound_device, scope: action, mode: exclusive}
+    timing: {estimated_duration_s: 0.2, timeout_s: 3}
+
+  - id: move_to_point
+    description: 在有效 Commissioning Session 内运动到一个已部署点位。
+    execution_kind: device_macro
+    params:
+      - {name: session_id, type: string, required: true}
+      - {name: point_ref, type: string, required: true}
+      - {name: command_id, type: string, required: true}
+      - {name: source_boot_id, type: string, required: true}
+      - {name: monotonic_sequence, type: integer, required: true, minimum: 1}
+      - {name: motion, type: string, required: false, enum: [move_j, move_l]}
+      - {name: speed_percent, type: number, required: false, minimum: 1, maximum: 20}
+      - {name: offset, type: object, required: false}
+    results:
+      - {name: success, type: boolean}
+      - {name: state, type: string}
+      - {name: command_id, type: string}
+      - {name: witness, type: object}
+    material: {mode: none, inputs: [], outputs: []}
+    resource_claims:
+      - {resource_ref: robot, resource_type: device, selector: bound_device, scope: action, mode: exclusive}
+      - {resource_ref: robot_cell, resource_type: workstation, selector: declared, scope: action, mode: exclusive}
+    timing: {estimated_duration_s: 15, timeout_s: 120}
+    recovery: *physical_recovery
+
+  - id: end_commissioning
+    description: 结束调试会话；不会触发机器人运动。
+    execution_kind: atomic
+    params:
+      - {name: session_id, type: string, required: true}
+    results:
+      - {name: success, type: boolean}
+      - {name: session_id, type: string}
+    material: {mode: none, inputs: [], outputs: []}
+    resource_claims: []
+    timing: {estimated_duration_s: 0.1, timeout_s: 2}
