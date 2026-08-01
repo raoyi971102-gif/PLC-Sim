@@ -44,6 +44,11 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+try:
+    from ..cli import runtime_command
+except ImportError:  # Direct `python -m ino_mcp.cli` compatibility.
+    from cli import runtime_command
+
 from .client import McpClient, McpError
 from .config import resolve_mcp_config
 from .toolkit import InoToolkit, DownloadStrategy
@@ -214,8 +219,14 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
     # 2) launch server
     if args.serve:
         server_py = Path(__file__).resolve().parents[1] / "server.py"
-        cmd = [sys.executable, str(server_py), "--csv", str(Path(args.out).resolve()),
-               "--port", str(args.port), "--host", args.host]
+        cmd = runtime_command(
+            "server",
+            server_py,
+            [
+                "--csv", str(Path(args.out).resolve()),
+                "--port", str(args.port), "--host", args.host,
+            ],
+        )
         if args.no_occupancy_true:
             cmd.append("--no-occupancy-true")
         log.info("[pipeline] 启动 server: %s", " ".join(cmd))

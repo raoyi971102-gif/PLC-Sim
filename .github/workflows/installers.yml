@@ -1,0 +1,159 @@
+name: OpcUaSim 原生安装包
+
+on:
+  push:
+    tags:
+      - 'opcua-sim-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: OpcUaSim
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - name: 校验标签与包版本
+        working-directory: OpcUaSim
+        shell: bash
+        run: |
+          package_version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          tag_version="${GITHUB_REF_NAME#opcua-sim-v}"
+          test "$package_version" = "$tag_version"
+      - name: 安装并测试
+        working-directory: OpcUaSim
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install '.[test]'
+          python -m pytest -q
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: OpcUaSim
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: OpcUaSim
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - name: 安装构建依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . "pyinstaller>=6.10,<7"
+      - name: 冻结 Windows 应用
+        run: >-
+          pyinstaller packaging/frozen_entry.py
+          --name OpcUaSim
+          --onedir
+          --windowed
+          --clean
+          --noconfirm
+          --collect-all opcua_sim
+          --copy-metadata unilab-opcua-sim
+      - name: 冒烟测试冻结应用与 Server 子进程
+        run: python packaging/smoke_frozen.py dist/OpcUaSim/OpcUaSim.exe
+      - name: 生成 Windows 安装程序
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $version = $env:GITHUB_REF_NAME -replace '^opcua-sim-v', ''
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" "packaging\windows-installer.iss"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpcUaSim-Windows-x64
+          path: OpcUaSim/artifacts/*.exe
+          if-no-files-found: error
+
+  macos:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: OpcUaSim
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: OpcUaSim
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: ${{ matrix.arch }}
+      - name: 安装构建依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . "pyinstaller>=6.10,<7"
+      - name: 冻结 macOS 应用
+        run: >-
+          pyinstaller packaging/frozen_entry.py
+          --name OpcUaSim
+          --onedir
+          --windowed
+          --clean
+          --noconfirm
+          --osx-bundle-identifier com.unilab.opcuasim
+          --collect-all opcua_sim
+          --copy-metadata unilab-opcua-sim
+      - name: 冒烟测试冻结应用与 Server 子进程
+        run: python packaging/smoke_frozen.py dist/OpcUaSim.app/Contents/MacOS/OpcUaSim
+      - name: 临时签名并生成 DMG
+        run: |
+          version="${GITHUB_REF_NAME#opcua-sim-v}"
+          bash packaging/build_macos_dmg.sh "$version" "${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpcUaSim-macOS-${{ matrix.arch }}
+          path: OpcUaSim/artifacts/*.dmg
+          if-no-files-found: error
+
+  release:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: 生成校验和与发布说明
+        shell: bash
+        run: |
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+          cd ..
+          cat > release-notes.md <<'NOTES'
+          OpcUaSim 原生安装包，无需预装 Python。
+
+          - Windows x64：运行 `OpcUaSim-Setup-Windows-x64-*.exe`
+          - Apple Silicon Mac：下载 `OpcUaSim-macOS-arm64-*.dmg`
+          - Intel Mac：下载 `OpcUaSim-macOS-x64-*.dmg`
+
+          当前安装包没有商业代码签名证书。Windows 可能显示 SmartScreen 提示；
+          macOS 使用临时签名但未经过 Apple 公证，首次请按住 Control 点击应用并选择“打开”。
+          NOTES
+      - name: 创建 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          release-assets/*
+          --verify-tag
+          --title "OpcUaSim ${GITHUB_REF_NAME#opcua-sim-v}"
+          --notes-file release-notes.md

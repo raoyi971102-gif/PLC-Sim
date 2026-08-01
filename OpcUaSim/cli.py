@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from pathlib import Path
 from typing import Optional, Sequence
 
 
@@ -34,6 +35,24 @@ Run `opcua-sim <command> --help` for command-specific options.
 
 def _qualified_module(module_name: str) -> str:
     return f"{__package__}.{module_name}" if __package__ else module_name
+
+
+def runtime_command(
+    command: str,
+    script_path: Path,
+    args: Sequence[str] = (),
+    *,
+    python_executable: Optional[str] = None,
+) -> list[str]:
+    """Build a child-process command for source and frozen runtimes.
+
+    PyInstaller applications do not contain a separately executable ``.py``
+    entry point.  A frozen child therefore re-enters the same executable and
+    lets :func:`main` dispatch the requested runtime command.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, command, *args]
+    return [python_executable or sys.executable, str(script_path), *args]
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

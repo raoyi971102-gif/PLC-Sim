@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import cli as package_cli
@@ -59,3 +60,40 @@ def test_cli_help_lists_all_installed_commands(capsys):
 def test_cli_reports_package_version(capsys):
     assert package_cli.main(["--version"]) == 0
     assert capsys.readouterr().out.strip() == "0.2.0"
+
+
+def test_runtime_command_uses_python_script_in_source_mode(monkeypatch):
+    monkeypatch.delattr(package_cli.sys, "frozen", raising=False)
+
+    command = package_cli.runtime_command(
+        "server",
+        Path("/checkout/server.py"),
+        ["--port", "4855"],
+        python_executable="/venv/bin/python",
+    )
+
+    assert command == [
+        "/venv/bin/python",
+        "/checkout/server.py",
+        "--port",
+        "4855",
+    ]
+
+
+def test_runtime_command_reenters_frozen_executable(monkeypatch):
+    monkeypatch.setattr(package_cli.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(package_cli.sys, "executable", "/Applications/OpcUaSim")
+
+    command = package_cli.runtime_command(
+        "szlab-handshake",
+        Path("/bundle/szlab_handshake_agent.py"),
+        ["--url", "opc.tcp://127.0.0.1:4855/xuse_sim/"],
+        python_executable="/ignored/python",
+    )
+
+    assert command == [
+        "/Applications/OpcUaSim",
+        "szlab-handshake",
+        "--url",
+        "opc.tcp://127.0.0.1:4855/xuse_sim/",
+    ]

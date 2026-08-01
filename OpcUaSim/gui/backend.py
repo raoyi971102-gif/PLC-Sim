@@ -44,6 +44,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 try:
+    from ..cli import runtime_command
     from ..common import (
         NodeDef,
         VTYPE_MAP,
@@ -68,6 +69,7 @@ try:
         parse_warm_dump,
     )
 except ImportError:  # Direct `python -m gui.backend` compatibility.
+    from cli import runtime_command
     from common import (
         NodeDef,
         VTYPE_MAP,
@@ -1090,13 +1092,17 @@ async def api_server_start(req: ServerStartReq) -> Dict[str, Any]:
     if not node_defs:
         raise HTTPException(400, "CSV 中没有可用的 VARIABLE 节点")
 
-    py = _find_python_exe()
-    server_py = _ROOT / "server.py"
-    cmd = [py, str(server_py),
-           "--host", req.host, "--port", str(req.port),
-           "--csv", resolved_csv,
-           "--ns-index", str(req.ns_index), "--ns-uri", req.ns_uri,
-           "--connection-state", str(connection_state_path())]
+    cmd = runtime_command(
+        "server",
+        _ROOT / "server.py",
+        [
+            "--host", req.host, "--port", str(req.port),
+            "--csv", resolved_csv,
+            "--ns-index", str(req.ns_index), "--ns-uri", req.ns_uri,
+            "--connection-state", str(connection_state_path()),
+        ],
+        python_executable=_find_python_exe(),
+    )
     if not req.occupancy_true:
         cmd.append("--no-occupancy-true")
 
@@ -1366,19 +1372,26 @@ async def api_agent_start(req: AgentStartReq) -> Dict[str, Any]:
         raise HTTPException(400, "已挂接外部 Agent，由进程管理器托管")
     if _STATE.agent_proc is not None and _STATE.agent_proc.poll() is None:
         raise HTTPException(400, "Handshake Agent 已在运行")
-    py = _find_python_exe()
     url = f"opc.tcp://{req.host}:{req.port}/xuse_sim/"
     profile = req.profile.strip().lower()
     options: Dict[str, Any] = {}
     if profile == "szlab":
-        agent_py = _ROOT / "szlab_handshake_agent.py"
-        cmd = [py, str(agent_py), "--url", url]
+        cmd = runtime_command(
+            "szlab-handshake",
+            _ROOT / "szlab_handshake_agent.py",
+            ["--url", url],
+            python_executable=_find_python_exe(),
+        )
         if req.config:
             cmd.extend(["--config", req.config])
         options = _extend_szlab_command(cmd, req)
     elif profile == "xuse":
-        agent_py = _ROOT / "handshake_agent.py"
-        cmd = [py, str(agent_py), "--url", url]
+        cmd = runtime_command(
+            "handshake",
+            _ROOT / "handshake_agent.py",
+            ["--url", url],
+            python_executable=_find_python_exe(),
+        )
         if req.config:
             cmd.extend(["--config", req.config])
         csv_path = req.csv or _STATE.last_extract_csv or str(default_csv_path())

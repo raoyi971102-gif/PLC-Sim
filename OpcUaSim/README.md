@@ -12,7 +12,21 @@
 
 ## 快速开始
 
-### pip 安装（推荐）
+### 原生安装包（无需 Python）
+
+从 [GitHub Releases](https://github.com/raoyi971102-gif/PLC-Sim/releases) 下载与系统匹配的安装包：
+
+- Windows 10/11 x64：`OpcUaSim-Setup-Windows-x64-*.exe`；
+- Apple Silicon Mac（M 系列芯片）：`OpcUaSim-macOS-arm64-*.dmg`；
+- Intel Mac：`OpcUaSim-macOS-x64-*.dmg`。
+
+Windows 安装后可从开始菜单启动。macOS 打开 DMG 后把 `OpcUaSim.app` 拖入
+“Applications”目录即可。应用会自动打开 Web GUI，不需要另外安装 Python 或依赖。
+
+当前安装包没有商业代码签名证书。Windows 可能显示 SmartScreen 提示；macOS
+使用临时签名但尚未经过 Apple 公证，首次启动请按住 Control 点击应用，选择“打开”。
+
+### pip 安装
 
 需要 Python 3.10 或更高版本。从已克隆的仓库安装：
 
