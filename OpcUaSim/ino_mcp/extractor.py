@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from ino_mcp.toolkit import InoToolkit
+from .toolkit import InoToolkit
 
 
 log = logging.getLogger("ino_mcp.extractor")

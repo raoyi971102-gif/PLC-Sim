@@ -12,6 +12,48 @@
 
 ## 快速开始
 
+### pip 安装（推荐）
+
+需要 Python 3.10 或更高版本。从已克隆的仓库安装：
+
+```bash
+python -m pip install ./OpcUaSim
+```
+
+也可以直接从 GitHub 安装（私有仓库需要本机 Git 已授权）：
+
+```bash
+python -m pip install \
+  "git+https://github.com/raoyi971102-gif/PLC-Sim.git#subdirectory=OpcUaSim"
+```
+
+安装后使用统一命令；不传子命令时默认启动 Web GUI：
+
+```bash
+opcua-sim
+opcua-sim gui --host 127.0.0.1 --port 18765
+opcua-sim server --host 127.0.0.1 --port 4855
+opcua-sim handshake --url opc.tcp://127.0.0.1:4855/xuse_sim/
+opcua-sim szlab-handshake --workflow szlab_s09_pipetting_workflow
+```
+
+如果系统没有将 Python Scripts 目录加入 `PATH`，可以等价运行：
+
+```bash
+python -m opcua_sim
+python -m opcua_sim server --help
+```
+
+wheel 中的演示 CSV、YAML 配置和 GUI 静态文件为只读包资源。上传的 CSV、
+提取结果和运行状态会写入用户数据目录：
+
+- macOS：`~/Library/Application Support/OpcUaSim`；
+- Windows：`%LOCALAPPDATA%\OpcUaSim`；
+- Linux：`$XDG_DATA_HOME/opcua-sim` 或 `~/.local/share/opcua-sim`。
+
+可用 `OPCUASIM_DATA_DIR` 统一覆盖上述目录。在源码仓库中运行时仍保留原有
+`OpcUaSim/data/` 路径，不影响 `.command` 和 `.bat` 启动器。
+
 ### macOS 一键启动
 
 需要 Python 3.10 或更高版本。进入 `OpcUaSim` 目录后，在 Finder 中双击：
@@ -376,9 +418,11 @@ OpcUaSim/
 ├── tools/                        # 诊断工具
 ├── vendor/inoproshop-mcp/        # 可选第三方 bundle 放置点
 ├── common.py
+├── cli.py                         # pip 安装后的统一命令分发
 ├── server.py
 ├── handshake_agent.py
 ├── szlab_handshake_agent.py      # SZLab Robot / S04-S09 握手仿真
+├── pyproject.toml                 # unilab-opcua-sim wheel 元数据
 ├── requirements.txt
 ├── setup_venv.bat
 └── start*.bat

@@ -28,16 +28,28 @@ from typing import Any, Dict, List, MutableMapping
 
 from opcua import Server, ua
 
-from common import (
-    DEFAULT_MAP,
-    VTYPE_MAP,
-    NodeDef,
-    OCC_RE,
-    connection_state_path,
-    default_csv_path,
-    load_csvs,
-    setup_logging,
-)
+try:
+    from .common import (
+        DEFAULT_MAP,
+        VTYPE_MAP,
+        NodeDef,
+        OCC_RE,
+        connection_state_path,
+        default_csv_path,
+        load_csvs,
+        setup_logging,
+    )
+except ImportError:  # Direct `python server.py` compatibility.
+    from common import (
+        DEFAULT_MAP,
+        VTYPE_MAP,
+        NodeDef,
+        OCC_RE,
+        connection_state_path,
+        default_csv_path,
+        load_csvs,
+        setup_logging,
+    )
 
 
 log = setup_logging("XUSE-Server")

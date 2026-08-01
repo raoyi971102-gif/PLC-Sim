@@ -44,10 +44,10 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from ino_mcp.client import McpClient, McpError
-from ino_mcp.config import resolve_mcp_config
-from ino_mcp.toolkit import InoToolkit, DownloadStrategy
-from ino_mcp.extractor import extract_gvl_variables, write_csv
+from .client import McpClient, McpError
+from .config import resolve_mcp_config
+from .toolkit import InoToolkit, DownloadStrategy
+from .extractor import extract_gvl_variables, write_csv
 
 
 log = logging.getLogger("ino_mcp.cli")

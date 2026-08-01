@@ -29,7 +29,10 @@ from typing import Any, Dict, Iterable, Literal, Optional
 
 from opcua import Client, ua
 
-from common import load_yaml, setup_logging
+try:
+    from .common import load_yaml, setup_logging
+except ImportError:  # Direct `python szlab_handshake_agent.py` compatibility.
+    from common import load_yaml, setup_logging
 
 
 log = setup_logging("SZLab-Handshake")

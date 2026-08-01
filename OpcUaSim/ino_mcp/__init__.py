@@ -12,7 +12,7 @@ ino_mcp —— OpcUaSim ↔ InoProShop MCP 桥接层
 其它 CODESYS 变体或直接走文件系统。
 """
 
-from ino_mcp.client import McpClient, McpError
-from ino_mcp.toolkit import InoToolkit, DownloadStrategy
+from .client import McpClient, McpError
+from .toolkit import InoToolkit, DownloadStrategy
 
 __all__ = ["McpClient", "McpError", "InoToolkit", "DownloadStrategy"]

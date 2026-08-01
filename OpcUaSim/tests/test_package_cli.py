@@ -1,0 +1,61 @@
+from __future__ import annotations
+
+import sys
+from types import SimpleNamespace
+
+import cli as package_cli
+
+
+def test_cli_defaults_to_gui_and_restores_process_arguments(monkeypatch):
+    imported: list[str] = []
+    delegated_argv: list[str] = []
+    original_argv = list(sys.argv)
+
+    def fake_import(name: str):
+        imported.append(name)
+
+        def fake_main() -> int:
+            delegated_argv.extend(sys.argv)
+            return 7
+
+        return SimpleNamespace(main=fake_main)
+
+    monkeypatch.setattr(package_cli.importlib, "import_module", fake_import)
+
+    assert package_cli.main([]) == 7
+    assert imported == ["gui.backend"]
+    assert delegated_argv == ["opcua-sim gui"]
+    assert sys.argv == original_argv
+
+
+def test_cli_forwards_remaining_arguments_to_selected_command(monkeypatch):
+    delegated_argv: list[str] = []
+
+    def fake_import(name: str):
+        assert name == "server"
+
+        def fake_main() -> int:
+            delegated_argv.extend(sys.argv)
+            return 0
+
+        return SimpleNamespace(main=fake_main)
+
+    monkeypatch.setattr(package_cli.importlib, "import_module", fake_import)
+
+    assert package_cli.main(["server", "--port", "4860"]) == 0
+    assert delegated_argv == ["opcua-sim server", "--port", "4860"]
+
+
+def test_cli_help_lists_all_installed_commands(capsys):
+    assert package_cli.main(["--help"]) == 0
+    output = capsys.readouterr().out
+    assert "gui" in output
+    assert "server" in output
+    assert "handshake" in output
+    assert "szlab-handshake" in output
+    assert "ino" in output
+
+
+def test_cli_reports_package_version(capsys):
+    assert package_cli.main(["--version"]) == 0
+    assert capsys.readouterr().out.strip() == "0.2.0"

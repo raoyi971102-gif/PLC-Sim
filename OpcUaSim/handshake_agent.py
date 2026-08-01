@@ -31,15 +31,26 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from opcua import Client, ua
 
-from common import (
-    NodeDef,
-    default_csv_path,
-    load_csvs,
-    load_yaml,
-    match_pos_node,
-    parse_suffix,
-    setup_logging,
-)
+try:
+    from .common import (
+        NodeDef,
+        default_csv_path,
+        load_csvs,
+        load_yaml,
+        match_pos_node,
+        parse_suffix,
+        setup_logging,
+    )
+except ImportError:  # Direct `python handshake_agent.py` compatibility.
+    from common import (
+        NodeDef,
+        default_csv_path,
+        load_csvs,
+        load_yaml,
+        match_pos_node,
+        parse_suffix,
+        setup_logging,
+    )
 
 
 log = setup_logging("XUSE-Agent")

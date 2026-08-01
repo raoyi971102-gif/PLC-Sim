@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from common import NodeDef, load_csv, node_defs_fingerprint
+from common import (
+    NodeDef,
+    connection_state_path,
+    load_csv,
+    node_defs_fingerprint,
+    runtime_data_dir,
+)
 
 
 def test_load_utf16_tab_separated_szlab_csv(tmp_path):
@@ -38,3 +44,13 @@ def test_node_defs_fingerprint_is_semantic_and_order_independent():
         [second, first]
     )
     assert node_defs_fingerprint([first]) != node_defs_fingerprint([second])
+
+
+def test_runtime_data_directory_can_be_overridden(monkeypatch, tmp_path):
+    runtime_root = tmp_path / "opcua-sim-state"
+    monkeypatch.setenv("OPCUASIM_DATA_DIR", str(runtime_root))
+
+    assert runtime_data_dir() == runtime_root.resolve()
+    assert connection_state_path() == (
+        runtime_root / "runtime" / "server-connections.json"
+    ).resolve()

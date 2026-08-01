@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -52,7 +53,29 @@ log = logging.getLogger("XUSE-common")
 # ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent
 BUILTIN_DEMO_CSV = PROJECT_ROOT / "data" / "demo_variables.csv"
-DEFAULT_CONNECTION_STATE = PROJECT_ROOT / "data" / "runtime" / "server-connections.json"
+
+
+def runtime_data_dir() -> Path:
+    """Return a writable data directory for uploads, extracts, and runtime state."""
+    configured = os.environ.get("OPCUASIM_DATA_DIR")
+    if configured:
+        return Path(configured).expanduser().resolve()
+
+    # Source checkouts keep established repository-local paths. Installed
+    # wheels do not ship pyproject.toml and must never write into site-packages.
+    if (PROJECT_ROOT / "pyproject.toml").is_file():
+        return PROJECT_ROOT / "data"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "OpcUaSim"
+    if os.name == "nt":
+        windows_root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        if windows_root:
+            return Path(windows_root).expanduser() / "OpcUaSim"
+        return Path.home() / "OpcUaSim"
+    xdg_root = os.environ.get("XDG_DATA_HOME")
+    if xdg_root:
+        return Path(xdg_root).expanduser() / "opcua-sim"
+    return Path.home() / ".local" / "share" / "opcua-sim"
 
 
 def default_csv_path() -> Path:
@@ -68,7 +91,7 @@ def connection_state_path() -> Path:
     configured = os.environ.get("OPCUASIM_CONNECTION_STATE")
     if configured:
         return Path(configured).expanduser().resolve()
-    return DEFAULT_CONNECTION_STATE
+    return runtime_data_dir() / "runtime" / "server-connections.json"
 
 
 # ---------------------------------------------------------------------------

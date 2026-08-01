@@ -43,28 +43,54 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from common import (
-    NodeDef,
-    VTYPE_MAP,
-    connection_state_path,
-    default_csv_path,
-    load_csvs,
-    node_defs_fingerprint,
-)
-from ino_mcp.client import McpClient, McpError
-from ino_mcp.config import resolve_mcp_config
-from ino_mcp.toolkit import InoToolkit, DownloadStrategy
-from ino_mcp.extractor import (
-    extract_gvl_variables,
-    find_gvl_paths,
-    parse_gvl_declaration,
-    write_csv,
-    _to_csv_rows,
-    list_editables_from_dump,
-    build_dut_registry_from_dump,
-    build_dut_registry_from_warm,
-    parse_warm_dump,
-)
+try:
+    from ..common import (
+        NodeDef,
+        VTYPE_MAP,
+        connection_state_path,
+        default_csv_path,
+        load_csvs,
+        node_defs_fingerprint,
+        runtime_data_dir,
+    )
+    from ..ino_mcp.client import McpClient, McpError
+    from ..ino_mcp.config import resolve_mcp_config
+    from ..ino_mcp.toolkit import InoToolkit, DownloadStrategy
+    from ..ino_mcp.extractor import (
+        extract_gvl_variables,
+        find_gvl_paths,
+        parse_gvl_declaration,
+        write_csv,
+        _to_csv_rows,
+        list_editables_from_dump,
+        build_dut_registry_from_dump,
+        build_dut_registry_from_warm,
+        parse_warm_dump,
+    )
+except ImportError:  # Direct `python -m gui.backend` compatibility.
+    from common import (
+        NodeDef,
+        VTYPE_MAP,
+        connection_state_path,
+        default_csv_path,
+        load_csvs,
+        node_defs_fingerprint,
+        runtime_data_dir,
+    )
+    from ino_mcp.client import McpClient, McpError
+    from ino_mcp.config import resolve_mcp_config
+    from ino_mcp.toolkit import InoToolkit, DownloadStrategy
+    from ino_mcp.extractor import (
+        extract_gvl_variables,
+        find_gvl_paths,
+        parse_gvl_declaration,
+        write_csv,
+        _to_csv_rows,
+        list_editables_from_dump,
+        build_dut_registry_from_dump,
+        build_dut_registry_from_warm,
+        parse_warm_dump,
+    )
 
 
 # 保持 GUI 后端启动契约不依赖可执行 Agent 模块，避免导入时初始化 Agent logger。
@@ -404,7 +430,12 @@ def _read_release() -> str:
     try:
         return (_ROOT / "VERSION").read_text(encoding="utf-8").strip() or "dev"
     except OSError:
-        return "dev"
+        try:
+            from importlib.metadata import version
+
+            return version("unilab-opcua-sim")
+        except Exception:  # Package metadata is absent during source execution.
+            return "dev"
 
 
 _RELEASE = _read_release()
@@ -749,7 +780,7 @@ class ExtractReq(BaseModel):
 async def api_project_extract(req: ExtractReq) -> Dict[str, Any]:
     tk = _require_tk()
     proj = Path(_STATE.current_project or "extracted")
-    default_out = _ROOT / "extracted" / (proj.stem + ".csv")
+    default_out = runtime_data_dir() / "extracted" / (proj.stem + ".csv")
     out_path = Path(req.out_path).resolve() if req.out_path else default_out
 
     async with _STATE.mcp_lock:
@@ -1013,7 +1044,7 @@ async def api_csv_upload(req: CsvUploadReq) -> Dict[str, Any]:
     if len(raw) > _CSV_UPLOAD_MAX:
         raise HTTPException(400, f"CSV 超过 {_CSV_UPLOAD_MAX // 1024 // 1024}MB")
 
-    dest_dir = _ROOT / "data" / "uploads"
+    dest_dir = runtime_data_dir() / "uploads"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / name
     dest.write_bytes(raw)
