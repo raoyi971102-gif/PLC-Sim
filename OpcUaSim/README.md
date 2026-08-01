@@ -252,7 +252,7 @@ start_szlab_handshake.bat opc.tcp://127.0.0.1:4855/xuse_sim/
 ```
 
 GUI 的“握手代理”中可将“仿真协议”切换为 `SZLab Poly Studio`。
-切换后会显示“工作流调试参数”，可从 Uni-Lab-SZLab 当前 12 个工作流中
+切换后会显示“工作流调试参数”，可从 Uni-Lab-SZLab 当前 13 个工作流中
 选择一个定向调试。代理只解析、初始化和轮询该工作流实际使用的节点；选择
 “全部工作流”时保持原有的全工位兼容模式。
 
@@ -270,7 +270,7 @@ python szlab_handshake_agent.py \
 
 | 参数 | 用途 |
 |---|---|
-| `--workflow` | `all` 或 12 个 SZLab 工作流 ID 之一 |
+| `--workflow` | `all` 或 13 个 SZLab 工作流 ID 之一 |
 | `--position` | S04 调试位置，范围 `1-6` |
 | `--pump` | S06 储液瓶，`1`、`2` 或 `3`（双泵） |
 | `--delay-ms` | 统一覆盖无设备时间参数的动作延时；S04 磁搅优先使用本次动作的磁搅时间 |

@@ -20,6 +20,22 @@ def test_workflow_catalog_matches_agent_and_gui() -> None:
         assert f'value="{workflow_id}"' in html
 
 
+def test_robot_liquid_stirring_demo_exposes_position_and_pump_options() -> None:
+    app_js = (
+        Path(__file__).parents[1] / "gui" / "static" / "app.js"
+    ).read_text(encoding="utf-8")
+    workflow_id = "szlab_robot_liquid_stirring_demo_workflow"
+    s04_workflows = app_js.split(
+        "const SZLAB_S04_WORKFLOWS", maxsplit=1
+    )[1].split("]);", maxsplit=1)[0]
+    pump_workflows = app_js.split(
+        "const SZLAB_PUMP_WORKFLOWS", maxsplit=1
+    )[1].split("]);", maxsplit=1)[0]
+
+    assert workflow_id in s04_workflows
+    assert workflow_id in pump_workflows
+
+
 def test_szlab_agent_options_are_forwarded_to_cli() -> None:
     req = AgentStartReq(
         profile="szlab",

@@ -519,6 +519,7 @@ const SZLAB_S04_WORKFLOWS = new Set([
   "szlab_magnetic_stirring_workflow",
   "szlab_robot_action_workflow",
   "s04_robot_stirring_workflow",
+  "szlab_robot_liquid_stirring_demo_workflow",
 ]);
 const SZLAB_PUMP_WORKFLOWS = new Set([
   "all",
@@ -526,6 +527,7 @@ const SZLAB_PUMP_WORKFLOWS = new Set([
   "szlab_stack_s05_s06_workflow",
   "szlab_mixer_workflow",
   "szlab_mixer_pump_production",
+  "szlab_robot_liquid_stirring_demo_workflow",
 ]);
 
 function syncSzlabAgentOptions() {

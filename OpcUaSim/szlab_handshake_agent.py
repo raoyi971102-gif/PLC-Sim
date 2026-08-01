@@ -148,6 +148,7 @@ WORKFLOW_IDS = (
     "szlab_stack_s05_s06_workflow",
     "szlab_mixer_workflow",
     "szlab_mixer_pump_production",
+    "szlab_robot_liquid_stirring_demo_workflow",
 )
 
 # 组件名同时也是节点发现和轮询的能力组。photo 只负责初始化 S05 的只读
@@ -165,6 +166,9 @@ WORKFLOW_COMPONENTS = {
     "szlab_stack_s05_s06_workflow": frozenset({"photo", "s06"}),
     "szlab_mixer_workflow": frozenset({"s06"}),
     "szlab_mixer_pump_production": frozenset({"s06"}),
+    "szlab_robot_liquid_stirring_demo_workflow": frozenset(
+        {"robot", "s06", "s04"}
+    ),
 }
 ALL_COMPONENTS = frozenset().union(*WORKFLOW_COMPONENTS.values())
 
@@ -173,6 +177,7 @@ WORKFLOW_ROBOT_TASKS = {
     "s04_robot_stirring_workflow": frozenset({7, 8}),
     "s06_robot_workflow": frozenset({11, 12}),
     "s07_robot_workflow": frozenset({13, 15, 16}),
+    "szlab_robot_liquid_stirring_demo_workflow": frozenset({7, 11, 12}),
 }
 ALL_ROBOT_TASKS = frozenset({7, 8, 11, 12, 13, 15, 16})
 
@@ -395,7 +400,12 @@ class SzlabHandshakeSimulator:
         self.position = int(position)
         self.pump = int(pump)
         self.s06_robot_workflow = bool(
-            s06_robot_workflow or self.workflow == "s06_robot_workflow"
+            s06_robot_workflow
+            or self.workflow
+            in (
+                "s06_robot_workflow",
+                "szlab_robot_liquid_stirring_demo_workflow",
+            )
         )
         self.s09_pipetting_workflow = bool(
             s09_pipetting_workflow

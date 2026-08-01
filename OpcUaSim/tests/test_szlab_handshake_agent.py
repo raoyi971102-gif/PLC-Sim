@@ -77,10 +77,79 @@ def reset_robot(
 
 def test_protocol_catalog_matches_reference_handshaker():
     assert len(SUPPORTED_ACTIONS) == 19
-    assert len(WORKFLOW_IDS) == 12
+    assert len(WORKFLOW_IDS) == 13
     assert set(ROBOT_ACTION_BY_TASK) == {7, 8, 11, 12, 13, 15, 16}
     simulator, nodes = make_simulator()
     assert nodes["Robot_任务写入完成"].value is False
+
+
+def test_robot_liquid_stirring_demo_enables_and_runs_all_five_actions():
+    position = 3
+    simulator = SzlabHandshakeSimulator(
+        "opc.tcp://unused",
+        workflow="szlab_robot_liquid_stirring_demo_workflow",
+        position=position,
+        pump=1,
+        delay_ms=0,
+    )
+    nodes = {name: FakeNode(0) for name in simulator.required_names}
+    simulator.nodes = nodes
+    simulator._prepare_capabilities()
+    simulator.initialize()
+
+    assert simulator.enabled_components == frozenset({"robot", "s06", "s04"})
+    assert simulator.enabled_robot_tasks == frozenset({7, 11, 12})
+    assert simulator.s04_positions == frozenset({position})
+    assert simulator.s06_robot_workflow is True
+    assert nodes[S06_BEAKER_SENSOR].value is False
+    assert nodes[s04_sensor(position)].value is False
+
+    # 1. 机器人放入 S06。
+    run_robot_task(simulator, nodes, task=11, started_at=1.0)
+    assert nodes[S06_BEAKER_SENSOR].value is True
+    reset_robot(simulator, nodes, now=1.12)
+
+    # 2. S06 加液。
+    nodes[S06_PROCESS].value = 2
+    nodes[S06_PARAMS_WRITTEN].value = True
+    accepted = simulator.tick(now=1.2)
+    completed = simulator.tick(now=1.2)
+    assert [(event.action, event.phase) for event in accepted + completed] == [
+        ("szlab_mixer_pump.run_solvent_addition", "accepted"),
+        ("szlab_mixer_pump.run_solvent_addition", "completed"),
+    ]
+    nodes[S06_PARAMS_WRITTEN].value = False
+    simulator.tick(now=1.21)
+
+    # 3. 机器人从 S06 取出。
+    run_robot_task(simulator, nodes, task=12, started_at=1.3)
+    assert nodes[S06_BEAKER_SENSOR].value is False
+    reset_robot(simulator, nodes, now=1.42)
+
+    # 4. 机器人放入所选 S04 搅拌位；任务 8 不属于本演示。
+    nodes[S04_ROBOT_POSITION].value = position
+    run_robot_task(simulator, nodes, task=7, started_at=1.5)
+    assert nodes[s04_sensor(position)].value is True
+    reset_robot(simulator, nodes, now=1.62)
+    nodes["任务号"].value = 8
+    nodes["Robot_任务写入完成"].value = True
+    assert simulator.tick(now=1.63) == []
+    nodes["Robot_任务写入完成"].value = False
+
+    # 5. S04 按工作流传入的磁搅时间反馈完成（本例设为 30 秒）。
+    nodes[s04_duration(position)].value = 30_000
+    nodes[s04_process(position)].value = 3
+    nodes[s04_params_written(position)].value = True
+    accepted = simulator.tick(now=2.0)
+    assert [(event.action, event.phase) for event in accepted] == [
+        ("szlab_mixer_stirrer.run_stirring", "accepted")
+    ]
+    assert simulator.tick(now=31.99) == []
+    completed = simulator.tick(now=32.0)
+    assert [(event.action, event.phase) for event in completed] == [
+        ("szlab_mixer_stirrer.run_stirring", "completed")
+    ]
+    assert nodes[s04_done(position)].value is True
 
 
 def test_robot_s04_place_and_pick_update_sensor_and_reset_with_retained_task():

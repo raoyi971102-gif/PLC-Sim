@@ -110,6 +110,7 @@ SZLAB_WORKFLOW_IDS = (
     "szlab_stack_s05_s06_workflow",
     "szlab_mixer_workflow",
     "szlab_mixer_pump_production",
+    "szlab_robot_liquid_stirring_demo_workflow",
 )
 
 

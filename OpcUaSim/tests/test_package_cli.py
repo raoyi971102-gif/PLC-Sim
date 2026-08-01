@@ -59,7 +59,7 @@ def test_cli_help_lists_all_installed_commands(capsys):
 
 def test_cli_reports_package_version(capsys):
     assert package_cli.main(["--version"]) == 0
-    assert capsys.readouterr().out.strip() == "0.2.1"
+    assert capsys.readouterr().out.strip() == "0.2.2"
 
 
 def test_runtime_command_uses_python_script_in_source_mode(monkeypatch):
