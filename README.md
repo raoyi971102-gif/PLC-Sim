@@ -8,7 +8,10 @@ PLC 与机器人接入相关的仿真、测试和参考资料。
 - [`机器人Python接入规范与参考`](./机器人Python接入规范与参考/)：机器人 Python 接入示例与参考资料。
 
 OPC UA 仿真项目已经包含公开演示变量表和 Python 依赖声明。进入
-`OpcUaSim` 后运行 `setup_venv.bat`，再运行 `start_all.bat` 即可开始。
+`OpcUaSim` 后即可开始：
+
+- macOS：在 Finder 中双击 `start_gui.command`；启动器会自动创建环境并安装依赖；
+- Windows：运行 `setup_venv.bat`，再运行 `start_all.bat`。
 
 两个目录分别维护依赖，不在仓库根目录混装：
 

@@ -12,6 +12,34 @@
 
 ## 快速开始
 
+### macOS 一键启动
+
+需要 Python 3.10 或更高版本。进入 `OpcUaSim` 目录后，在 Finder 中双击：
+
+- `start_gui.command`：推荐入口，启动 Web GUI 并自动打开浏览器；
+- `start_all.command`：同时启动 OPC UA Server 和默认 XUSE Handshake Agent。
+
+首次启动会自动创建 `.venv` 并安装 `requirements.txt`，后续启动会复用环境；
+依赖文件变化时会自动同步，不需要手动运行 Python 文件。
+
+如果 macOS 首次阻止打开，按住 Control 点击 `.command` 文件，选择“打开”，再确认一次。
+也可以从终端运行：
+
+```bash
+./start_gui.command
+# 或同时启动 Server + Agent
+./start_all.command
+```
+
+加载自己的变量表：
+
+```bash
+./start_all.command "/path/to/xuse_variables.csv"
+```
+
+macOS 支持 OPC UA Server、Handshake Agent 和 Web GUI。InoProShop 本体仅支持
+Windows，因此 GUI 中依赖 InoProShop 的工程编辑、编译和下载功能在 macOS 上不可用。
+
 ### Windows 一键安装
 
 需要 Python 3.10 或更高版本：
@@ -85,19 +113,32 @@ Name,EnglishName,NodeType,DataType,NodeLanguage,NodeId
 
 ## 常用启动入口
 
-| 文件 | 用途 |
-|---|---|
-| `start.bat` | 只启动 OPC UA Server |
-| `start_handshake.bat` | 只启动 Handshake Agent |
-| `start_szlab_handshake.bat` | 只启动 SZLab Poly Studio 握手仿真 |
-| `start_all.bat` | 同时启动 Server 和 Agent |
-| `start_gui.bat` | 启动 Web GUI，默认地址 `http://127.0.0.1:18765/` |
-| `pick.bat` | 通过文件选择器加载一份或多份 CSV |
-| `setup_venv.bat` | 创建项目虚拟环境并安装依赖 |
+| macOS | Windows | 用途 |
+|---|---|---|
+| `start.command` | `start.bat` | 只启动 OPC UA Server |
+| `start_handshake.command` | `start_handshake.bat` | 只启动默认 XUSE Handshake Agent |
+| `start_szlab_handshake.command` | `start_szlab_handshake.bat` | 只启动 SZLab Poly Studio 握手仿真 |
+| `start_all.command` | `start_all.bat` | 同时启动 Server 和默认 XUSE Agent |
+| `start_gui.command` | `start_gui.bat` | 启动 Web GUI，默认地址 `http://127.0.0.1:18765/` |
+| — | `pick.bat` | 通过文件选择器加载一份或多份 CSV |
+| 启动器自动完成 | `setup_venv.bat` | 创建项目虚拟环境并安装依赖 |
+
+macOS 启动器按以下顺序选择 Python：
+
+1. 项目内 `.venv`
+2. `PYTHON` 环境变量
+3. `PATH` 中的 Python 3.10 或更高版本
+
+`start_all.command` 默认使用端口 `4855`。如需改端口，可在终端设置
+`OPCUASIM_PORT`；Server 与 Agent 会自动使用相同端口：
+
+```bash
+OPCUASIM_PORT=4860 ./start_all.command
+```
 
 GUI 诊断脚本位于 `tools/diagnose.ps1`。
 
-启动脚本按以下顺序选择 Python：
+Windows 启动脚本按以下顺序选择 Python：
 
 1. 项目内 `.venv`
 2. `PYTHON` 环境变量
@@ -205,8 +246,9 @@ python szlab_handshake_agent.py \
 
 ## Web GUI
 
-```bat
-start_gui.bat
+```text
+macOS:  start_gui.command
+Windows: start_gui.bat
 ```
 
 GUI 提供三个独立工作区：
