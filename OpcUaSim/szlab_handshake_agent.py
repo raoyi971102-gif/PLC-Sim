@@ -6,10 +6,11 @@ SZLab Poly Studio OPC UA 握手仿真驱动。
 这里保留了每个工站自己的接单和复位语义：
 
 * Robot：支持任务 7/8/11/12/13/15/16，并同步物料在位传感器；
-* S04：支持 1-6 号磁搅位，参数标志和工艺号均复位后才重新允许加工；
+* S04：支持 1-6 号磁搅位，按上位机写入的磁搅时间反馈完成；
 * S06：参数标志复位即可重新允许加工，工艺号可以保留；
 * S07/S08：返回工艺号，S08 还会等待瓶盖暂存位复位；
-* S09：用持续保留的工艺号接单，避免漏掉约 0.1 秒的参数完成脉冲。
+* S09：用持续保留的工艺号接单，避免漏掉约 0.1 秒的参数完成脉冲，
+  同时屏蔽代理启动前已经存在的无脉冲残留工艺号。
 
 节点优先按实机 NodeId ``ns=4;s=上位机通讯|<变量名>`` 直连；直连失败时
 递归扫描 BrowseName，因此也能连接由本仓库或 Uni-LabOS 测试工具创建的服务器。
@@ -211,6 +212,10 @@ def s04_done(position: int) -> str:
     return f"S04{int(position)}加工完成"
 
 
+def s04_duration(position: int) -> str:
+    return f"磁搅时间设置_上位机[{int(position) - 1}]"
+
+
 def s09_remaining_volume(bottle: int) -> str:
     return f"S09液体瓶{int(bottle)}剩余液量"
 
@@ -258,6 +263,8 @@ class CycleState:
     process: int = 0
     position: int = 0
     sensor: str = ""
+    duration_seconds: float = 0.0
+    waiting_for_params_clear: bool = False
 
 
 @dataclass(frozen=True)
@@ -418,6 +425,8 @@ class SzlabHandshakeSimulator:
         self.s08 = CycleState()
         self.s09 = CycleState()
         self._s071_loaded_sensor = ""
+        self._s09_startup_stale_process: Optional[int] = None
+        self._s09_startup_guard_captured = False
         self._warned_inputs: set[tuple[str, int]] = set()
         self.completed_actions = 0
         self._stop = threading.Event()
@@ -457,6 +466,7 @@ class SzlabHandshakeSimulator:
                         s04_process(s04_position),
                         s04_params_written(s04_position),
                         s04_done(s04_position),
+                        s04_duration(s04_position),
                     }
                 )
         if "s06" in components:
@@ -638,12 +648,15 @@ class SzlabHandshakeSimulator:
             log.warning("部分握手因 CSV/Server 缺少节点而跳过：%s", "; ".join(missing_messages))
 
     def initialize(self) -> None:
+        # 先快照 PC 输入，再写仿真器输出。否则远程初始化节点较多时，
+        # 初始化期间到达的新命令可能被误判为启动残留值。
+        self._reset_internal_state()
+        self._capture_s09_startup_guard()
         written = 0
         for name, value in self.initial_values.items():
             if name in self.nodes:
                 self._write(name, value)
                 written += 1
-        self._reset_internal_state()
         log.info("PLC 侧握手初始状态已写入：%d 个节点", written)
 
     def cleanup(self) -> None:
@@ -680,11 +693,34 @@ class SzlabHandshakeSimulator:
         self.s08 = CycleState()
         self.s09 = CycleState()
         self._s071_loaded_sensor = ""
+        self._s09_startup_stale_process = None
+        self._s09_startup_guard_captured = False
         self._warned_inputs.clear()
+
+    def _capture_s09_startup_guard(self) -> None:
+        """快照 S09 启动前的 PC 输入，避免把上次中断的工艺当成新命令。"""
+        self._s09_startup_guard_captured = True
+        self._s09_startup_stale_process = None
+        if "s09" not in self.enabled_groups:
+            return
+        if S09_PROCESS not in self.nodes or S09_PARAMS_WRITTEN not in self.nodes:
+            return
+        process = int(self._read(S09_PROCESS) or 0)
+        params_written = bool(self._read(S09_PARAMS_WRITTEN))
+        if process in S09_PROCESS_LABELS and not params_written:
+            self._s09_startup_stale_process = process
+            log.warning(
+                "S09 启动时检测到无参数脉冲的残留工艺 %d (%s)；"
+                "等待工艺号变化或新的参数完成脉冲",
+                process,
+                S09_PROCESS_LABELS[process],
+            )
 
     def run_forever(self, initialize: bool = True) -> None:
         if initialize:
             self.initialize()
+        elif not self._s09_startup_guard_captured:
+            self._capture_s09_startup_guard()
         log.info("SZLab 握手仿真已启动，poll=%dms", self.poll_ms)
         while not self._stop.wait(self.poll_ms / 1000.0):
             try:
@@ -831,12 +867,17 @@ class SzlabHandshakeSimulator:
             self._write(s04_done(position), False)
             cycle.phase = "executing"
             cycle.process = process
-            cycle.due_at = now + self._delay_seconds("s04", f"s04:{position}")
+            cycle.duration_seconds = self._s04_duration_seconds(position)
+            cycle.due_at = now + cycle.duration_seconds
             events.append(
                 HandshakeEvent(
                     SUPPORTED_ACTIONS[1],
                     "accepted",
-                    {"process": process, "position": position},
+                    {
+                        "process": process,
+                        "position": position,
+                        "duration_seconds": cycle.duration_seconds,
+                    },
                 )
             )
         elif cycle.phase == "executing" and now >= cycle.due_at:
@@ -846,7 +887,11 @@ class SzlabHandshakeSimulator:
                 HandshakeEvent(
                     SUPPORTED_ACTIONS[1],
                     "completed",
-                    {"process": cycle.process, "position": position},
+                    {
+                        "process": cycle.process,
+                        "position": position,
+                        "duration_seconds": cycle.duration_seconds,
+                    },
                 )
             )
         elif cycle.phase == "await_reset" and not params_written and process == 0:
@@ -1021,12 +1066,31 @@ class SzlabHandshakeSimulator:
         events: list[HandshakeEvent] = []
         process = int(self._read(S09_PROCESS) or 0)
         params_written = bool(self._read(S09_PARAMS_WRITTEN))
+        if not self._s09_startup_guard_captured:
+            self._capture_s09_startup_guard()
+        stale_process = self._s09_startup_stale_process
+        if stale_process is not None:
+            if not params_written and process == stale_process:
+                return events
+            self._s09_startup_stale_process = None
+            log.info(
+                "S09 启动残留保护已解除：启动工艺=%d，当前工艺=%d，参数完成=%s",
+                stale_process,
+                process,
+                params_written,
+            )
         if cycle.phase == "idle" and process in S09_PROCESS_LABELS:
             self._write(S09_ALLOW, False)
             self._write(S09_DONE, 0)
             cycle.phase = "executing"
             cycle.process = process
-            cycle.due_at = now + self._delay_seconds("s09")
+            cycle.duration_seconds = self._delay_seconds("s09")
+            cycle.waiting_for_params_clear = params_written
+            cycle.due_at = (
+                0.0
+                if cycle.waiting_for_params_clear
+                else now + cycle.duration_seconds
+            )
             events.append(
                 HandshakeEvent(
                     SUPPORTED_ACTIONS[9],
@@ -1035,9 +1099,16 @@ class SzlabHandshakeSimulator:
                         "process": process,
                         "process_label": S09_PROCESS_LABELS[process],
                         "params_written": params_written,
+                        "duration_seconds": cycle.duration_seconds,
                     },
                 )
             )
+        elif cycle.phase == "executing" and cycle.waiting_for_params_clear:
+            if not params_written:
+                # Edge 的参数脉冲默认持续约 0.1 秒。从脉冲回落后再计时，
+                # 确保 Edge 已经进入完成信号等待，不会把新完成号误认为旧周期。
+                cycle.waiting_for_params_clear = False
+                cycle.due_at = now + cycle.duration_seconds
         elif cycle.phase == "executing" and now >= cycle.due_at:
             self._write(S09_DONE, cycle.process)
             cycle.phase = "await_reset"
@@ -1048,6 +1119,7 @@ class SzlabHandshakeSimulator:
                     {
                         "process": cycle.process,
                         "process_label": S09_PROCESS_LABELS[cycle.process],
+                        "duration_seconds": cycle.duration_seconds,
                     },
                 )
             )
@@ -1067,6 +1139,20 @@ class SzlabHandshakeSimulator:
     def _delay_seconds(self, group: str, key: Optional[str] = None) -> float:
         delay = self.delays.get(key or "", self.delays.get(group, self.delay_ms))
         return max(0, int(delay)) / 1000.0
+
+    def _s04_duration_seconds(self, position: int) -> float:
+        name = s04_duration(position)
+        if name not in self.nodes:
+            return self._delay_seconds("s04", f"s04:{position}")
+        try:
+            duration_ms = int(self._read(name) or 0)
+        except (TypeError, ValueError):
+            log.warning(
+                "%s 无法解析，改用配置延时",
+                name,
+            )
+            return self._delay_seconds("s04", f"s04:{position}")
+        return max(0, duration_ms) / 1000.0
 
     def _warn_unsupported_input(self, group: str, value: int) -> None:
         warning = (group, value)
@@ -1187,8 +1273,8 @@ def main() -> int:
         node_prefix=args.node_prefix,
         delay_ms=args.delay_ms if args.delay_ms is not None else int(config.get("delay_ms", 120)),
         poll_ms=args.poll_ms if args.poll_ms is not None else int(config.get("poll_ms", 20)),
-        # 显式全局延时用于交互式调试时，应覆盖 YAML 的分组延时；否则 UI 中
-        # 修改 delay_ms 会被 robot/s04/... 的旧值悄悄遮蔽。
+        # 显式全局延时覆盖 YAML 的分组延时。设备动作自身的时间参数
+        # （如 S04 磁搅时间）仍然优先，delay_ms 只是无时间参数时的仿真延时。
         delays={} if args.delay_ms is not None else dict(config.get("delays", {})),
         initial_values=dict(config.get("initial_values", {})),
         strict=args.strict,

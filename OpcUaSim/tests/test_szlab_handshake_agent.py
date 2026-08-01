@@ -22,6 +22,7 @@ from szlab_handshake_agent import (
     parse_args,
     s04_allow,
     s04_done,
+    s04_duration,
     s04_params_written,
     s04_process,
     s04_sensor,
@@ -122,6 +123,7 @@ def test_selected_workflow_limits_nodes_initialization_and_polling():
         s04_process(4),
         s04_params_written(4),
         s04_done(4),
+        s04_duration(4),
     }
 
     simulator.nodes = {name: FakeNode(0) for name in simulator.required_names}
@@ -228,6 +230,80 @@ def test_s09_accepts_persistent_process_even_if_parameter_pulse_was_missed():
     assert nodes["S09允许加工"].value is False
     simulator.tick(now=3.24)
     assert nodes["S09工艺完成"].value == 7
+
+
+def test_s09_ignores_stale_process_present_before_agent_initialization():
+    simulator = SzlabHandshakeSimulator(
+        "opc.tcp://unused",
+        delay_ms=100,
+        workflow="szlab_s09_pipetting_workflow",
+    )
+    nodes = {name: FakeNode(0) for name in simulator.required_names}
+    nodes[S09_PROCESS].value = 5
+    nodes[S09_PARAMS_WRITTEN].value = False
+    simulator.nodes = nodes
+    simulator._prepare_capabilities()
+    simulator.initialize()
+
+    assert simulator.tick(now=3.0) == []
+    assert simulator.tick(now=3.11) == []
+    assert nodes["S09工艺完成"].value == 0
+    assert nodes["S09允许加工"].value is True
+
+    # 新的参数完成脉冲能区分同一工艺号的新请求与启动残留值。
+    nodes[S09_PARAMS_WRITTEN].value = True
+    accepted = simulator.tick(now=3.12)
+    assert [(event.phase, event.details["process"]) for event in accepted] == [
+        ("accepted", 5)
+    ]
+    simulator.tick(now=3.23)
+    assert nodes["S09工艺完成"].value == 0
+    nodes[S09_PARAMS_WRITTEN].value = False
+    simulator.tick(now=3.24)
+    simulator.tick(now=3.35)
+    assert nodes["S09工艺完成"].value == 5
+
+
+def test_s09_starts_completion_delay_after_parameter_pulse_falls():
+    simulator, nodes = make_simulator(delay_ms=100)
+    nodes[S09_PROCESS].value = 5
+    nodes[S09_PARAMS_WRITTEN].value = True
+
+    accepted = simulator.tick(now=4.0)
+    assert accepted[0].phase == "accepted"
+    simulator.tick(now=4.11)
+    assert nodes["S09工艺完成"].value == 0
+
+    nodes[S09_PARAMS_WRITTEN].value = False
+    simulator.tick(now=4.12)
+    simulator.tick(now=4.21)
+    assert nodes["S09工艺完成"].value == 0
+    completed = simulator.tick(now=4.22)
+    assert completed[0].phase == "completed"
+    assert nodes["S09工艺完成"].value == 5
+
+
+def test_s04_uses_requested_stirring_duration_before_completing():
+    simulator, nodes = make_simulator(delay_ms=100)
+    position = 1
+    duration_name = s04_duration(position)
+    nodes[duration_name] = FakeNode(30_000)
+    nodes[s04_process(position)].value = 3
+    nodes[s04_params_written(position)].value = True
+
+    accepted = simulator.tick(now=10.0)
+    assert [(event.phase, event.details["process"]) for event in accepted] == [
+        ("accepted", 3)
+    ]
+    simulator.tick(now=10.11)
+    assert nodes[s04_done(position)].value is False
+    simulator.tick(now=39.99)
+    assert nodes[s04_done(position)].value is False
+    completed = simulator.tick(now=40.0)
+    assert [(event.phase, event.details["process"]) for event in completed] == [
+        ("completed", 3)
+    ]
+    assert nodes[s04_done(position)].value is True
 
 
 def test_s071_and_s072_robot_sequence_rearms_powder_slot():
