@@ -231,6 +231,18 @@ def test_parallel_stack_revision_serializes_robot_pours_then_stirs():
     ]
 
 
+def test_parallel_stack_revision_ignores_global_s06_robot_mode():
+    simulator = SzlabHandshakeSimulator(
+        "opc.tcp://unused",
+        workflow="szlab_stack_s05_s06_workflow",
+        s06_robot_workflow=True,
+    )
+
+    assert simulator.enabled_robot_tasks == frozenset({25})
+    assert simulator.s06_robot_workflow is False
+    assert simulator.initial_values[S06_BEAKER_SENSOR] is True
+
+
 def test_robot_s04_place_and_pick_update_sensor_and_reset_with_retained_task():
     simulator, nodes = make_simulator()
     nodes[S04_ROBOT_POSITION].value = 2

@@ -407,12 +407,16 @@ class SzlabHandshakeSimulator:
         self.workflow = str(workflow or "all")
         self.position = int(position)
         self.pump = int(pump)
+        self.enabled_robot_tasks = workflow_robot_tasks(self.workflow)
         self.s06_robot_workflow = bool(
-            s06_robot_workflow
-            or self.workflow
-            in (
-                "s06_robot_workflow",
-                "szlab_robot_liquid_stirring_demo_workflow",
+            self.enabled_robot_tasks.intersection({11, 12})
+            and (
+                s06_robot_workflow
+                or self.workflow
+                in (
+                    "s06_robot_workflow",
+                    "szlab_robot_liquid_stirring_demo_workflow",
+                )
             )
         )
         self.s09_pipetting_workflow = bool(
@@ -423,7 +427,6 @@ class SzlabHandshakeSimulator:
         if self.workflow == "all" and not self.s09_pipetting_workflow:
             components.discard("s09")
         self.enabled_components = frozenset(components)
-        self.enabled_robot_tasks = workflow_robot_tasks(self.workflow)
         self.s04_positions = workflow_s04_positions(self.workflow, self.position)
         self.s09_remaining_volume_ml = float(s09_remaining_volume_ml)
         defaults = default_initial_values(
