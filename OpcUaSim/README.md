@@ -281,6 +281,11 @@ python szlab_handshake_agent.py \
 `ns=4;s=上位机通讯|<变量名>`，找不到时按 BrowseName 递归匹配。
 缺失某个工位节点时默认只跳过该工位；命令行增加 `--strict` 可改为立即报错。
 
+`szlab_stack_s05_s06_workflow` 同时兼容原有的 S05/S06 联调流程和
+`szlab-parallel-robot-lock-rev-1` revision。后者会并行执行 S05 拍照与 S06
+加液，随后两条分支依次申请同一个 Robot 任务 25（S08 倒料类型 1、2），汇合后
+执行 S04 搅拌。握手器在第一条 Robot 握手复位前不会接收第二条，从而模拟设备锁。
+
 延时、工作流和 PLC 侧初始值位于 `config/szlab_handshake.yaml`。命令行或 GUI
 显式参数优先于该配置：
 

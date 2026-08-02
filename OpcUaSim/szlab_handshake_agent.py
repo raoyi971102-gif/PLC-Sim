@@ -23,7 +23,7 @@ import signal
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, Literal, Optional
 
@@ -86,6 +86,7 @@ S08_PARAMS_WRITTEN = "S08参数写入完成"
 S08_DONE = "S08工艺完成"
 S08_CAP_STORAGE_SLOT = "S082瓶盖暂存位"
 S08_STATION_STATUS = "工站状态[7]"
+S08_POUR_PRODUCT_TYPE = "S08倒料产品选择"
 S08_PROCESS_LABELS = {
     1: "500 mL 样品瓶开盖",
     2: "500 mL 样品瓶关盖",
@@ -133,6 +134,7 @@ SUPPORTED_ACTIONS = (
     "szlab_s07_solid_addition.dose_powder",
     "szlab_s08_cap_station.process_cap_with_sample_parts",
     "szlab_poly_plc.get_stack_status",
+    "szlab_mixer_robot.submit_pour_from_s08",
 )
 
 WORKFLOW_IDS = (
@@ -163,7 +165,10 @@ WORKFLOW_COMPONENTS = {
     "szlab_s07_solid_addition_workflow": frozenset({"s07"}),
     "s08_cap_workflow": frozenset({"s08"}),
     "szlab_s09_pipetting_workflow": frozenset({"s09"}),
-    "szlab_stack_s05_s06_workflow": frozenset({"photo", "s06"}),
+    # 同时兼容 python-v1（S05 + S06）和附件中的并行机器人锁 revision。
+    "szlab_stack_s05_s06_workflow": frozenset(
+        {"photo", "s06", "robot", "s04"}
+    ),
     "szlab_mixer_workflow": frozenset({"s06"}),
     "szlab_mixer_pump_production": frozenset({"s06"}),
     "szlab_robot_liquid_stirring_demo_workflow": frozenset(
@@ -177,9 +182,10 @@ WORKFLOW_ROBOT_TASKS = {
     "s04_robot_stirring_workflow": frozenset({7, 8}),
     "s06_robot_workflow": frozenset({11, 12}),
     "s07_robot_workflow": frozenset({13, 15, 16}),
+    "szlab_stack_s05_s06_workflow": frozenset({25}),
     "szlab_robot_liquid_stirring_demo_workflow": frozenset({7, 11, 12}),
 }
-ALL_ROBOT_TASKS = frozenset({7, 8, 11, 12, 13, 15, 16})
+ALL_ROBOT_TASKS = frozenset({7, 8, 11, 12, 13, 15, 16, 25})
 
 ROBOT_ACTION_BY_TASK = {
     7: SUPPORTED_ACTIONS[0],
@@ -189,6 +195,7 @@ ROBOT_ACTION_BY_TASK = {
     13: SUPPORTED_ACTIONS[11],
     15: SUPPORTED_ACTIONS[12],
     16: SUPPORTED_ACTIONS[13],
+    25: SUPPORTED_ACTIONS[19],
 }
 S07_ACTION_BY_PROCESS = {
     1: SUPPORTED_ACTIONS[14],
@@ -273,6 +280,7 @@ class CycleState:
     sensor: str = ""
     duration_seconds: float = 0.0
     waiting_for_params_clear: bool = False
+    details: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -471,6 +479,8 @@ class SzlabHandshakeSimulator:
                 names.update(S071_SENSOR_BY_SLOT.values())
             if self.enabled_robot_tasks.intersection({15, 16}):
                 names.add(S072_SENSOR_BY_POSITION[1])
+            if 25 in self.enabled_robot_tasks:
+                names.add(S08_POUR_PRODUCT_TYPE)
         if "s04" in components:
             for s04_position in self.s04_positions:
                 names.update(
@@ -609,6 +619,8 @@ class SzlabHandshakeSimulator:
         if self.workflow == "all" and not self.s09_pipetting_workflow:
             components.discard("s09")
         groups: Dict[str, Iterable[str]] = {
+            # 产品类型等任务专属参数在接单时单独校验，不能因为旧变量表缺少
+            # 某个新任务参数就禁用整个 Robot 握手组。
             "robot": (
                 ROBOT_HOME,
                 ROBOT_WRITE_ALLOWED,
@@ -775,7 +787,7 @@ class SzlabHandshakeSimulator:
                 if target is None:
                     self._warn_unsupported_input("robot", task)
                     return events
-                position, sensor = target
+                position, sensor, details = target
                 self._write(ROBOT_WRITE_ALLOWED, False)
                 self._write(ROBOT_HOME, False)
                 self._write(ROBOT_TASK_COMPLETE, 0)
@@ -783,6 +795,7 @@ class SzlabHandshakeSimulator:
                 cycle.process = task
                 cycle.position = position
                 cycle.sensor = sensor
+                cycle.details = details
                 cycle.due_at = now + self._delay_seconds("robot")
                 events.append(
                     HandshakeEvent(
@@ -792,6 +805,7 @@ class SzlabHandshakeSimulator:
                             "task_number": task,
                             **({"position": position} if position else {}),
                             **({"sensor": sensor} if sensor else {}),
+                            **details,
                         },
                     )
                 )
@@ -819,6 +833,7 @@ class SzlabHandshakeSimulator:
                         **({"position": cycle.position} if cycle.position else {}),
                         **({"sensor": cycle.sensor} if cycle.sensor else {}),
                         **({"rearmed_sensor": rearmed_sensor} if rearmed_sensor else {}),
+                        **cycle.details,
                     },
                 )
             )
@@ -836,17 +851,19 @@ class SzlabHandshakeSimulator:
                         {
                             "task_number": cycle.process,
                             "observed_task_number": observed_task,
+                            **cycle.details,
                         },
                     )
                 )
                 self.robot = CycleState()
         return events
 
-    def _robot_target(self, task: int) -> Optional[tuple[int, str]]:
+    def _robot_target(self, task: int) -> Optional[tuple[int, str, Dict[str, Any]]]:
         if task not in self.enabled_robot_tasks:
             return None
         position = 0
         sensor = ""
+        details: Dict[str, Any] = {}
         if task in (7, 8):
             if S04_ROBOT_POSITION not in self.nodes:
                 return None
@@ -866,9 +883,17 @@ class SzlabHandshakeSimulator:
         elif task in (15, 16):
             position = 1
             sensor = S072_SENSOR_BY_POSITION[position]
+        elif task == 25:
+            if S08_POUR_PRODUCT_TYPE not in self.nodes:
+                return None
+            product_type = int(self._read(S08_POUR_PRODUCT_TYPE) or 0)
+            if product_type not in (1, 2):
+                self._warn_unsupported_input("S08倒料产品选择", product_type)
+                return None
+            details["product_type"] = product_type
         if sensor and sensor not in self.nodes:
             return None
-        return position, sensor
+        return position, sensor, details
 
     def _tick_s04(self, position: int, now: float) -> list[HandshakeEvent]:
         cycle = self.s04_cycles[position]

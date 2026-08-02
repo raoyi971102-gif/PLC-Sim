@@ -26,7 +26,13 @@ def test_robot_handshake_against_real_opcua_server(tmp_path):
     port = _free_port()
     endpoint = f"opc.tcp://127.0.0.1:{port}/xuse_sim/"
     definitions = [
-        NodeDef("Robot_Home", "", "VARIABLE", "BOOLEAN", "ns=4;s=上位机通讯|Robot_Home"),
+        NodeDef(
+            "Robot_Home",
+            "",
+            "VARIABLE",
+            "BOOLEAN",
+            "ns=4;s=上位机通讯|Robot_Home",
+        ),
         NodeDef(
             "Robot_任务允许写入",
             "",
@@ -41,7 +47,13 @@ def test_robot_handshake_against_real_opcua_server(tmp_path):
             "BOOLEAN",
             "ns=4;s=上位机通讯|Robot_任务写入完成",
         ),
-        NodeDef("任务号", "", "VARIABLE", "INT32", "ns=4;s=上位机通讯|任务号"),
+        NodeDef(
+            "任务号",
+            "",
+            "VARIABLE",
+            "INT32",
+            "ns=4;s=上位机通讯|任务号",
+        ),
         NodeDef(
             "Robot_任务完成",
             "",
@@ -107,6 +119,87 @@ def test_robot_handshake_against_real_opcua_server(tmp_path):
         assert nodes["任务号"].get_value() == 7
         assert nodes["Robot_任务完成"].get_value() == 0
         assert nodes["Robot_任务允许写入"].get_value() is True
+    finally:
+        simulator.disconnect()
+        server.stop()
+
+
+def test_parallel_revision_robot_lock_against_real_opcua_server():
+    port = _free_port()
+    endpoint = f"opc.tcp://127.0.0.1:{port}/xuse_sim/"
+    definitions = [
+        NodeDef("Robot_Home", "", "VARIABLE", "BOOLEAN", "ns=4;s=上位机通讯|Robot_Home"),
+        NodeDef(
+            "Robot_任务允许写入",
+            "",
+            "VARIABLE",
+            "BOOLEAN",
+            "ns=4;s=上位机通讯|Robot_任务允许写入",
+        ),
+        NodeDef(
+            "Robot_任务写入完成",
+            "",
+            "VARIABLE",
+            "BOOLEAN",
+            "ns=4;s=上位机通讯|Robot_任务写入完成",
+        ),
+        NodeDef("任务号", "", "VARIABLE", "INT32", "ns=4;s=上位机通讯|任务号"),
+        NodeDef(
+            "Robot_任务完成",
+            "",
+            "VARIABLE",
+            "INT32",
+            "ns=4;s=上位机通讯|Robot_任务完成",
+        ),
+        NodeDef(
+            "S08倒料产品选择",
+            "",
+            "VARIABLE",
+            "INT32",
+            "ns=4;s=上位机通讯|S08倒料产品选择",
+        ),
+    ]
+    server = build_server(endpoint)
+    namespace_index = register_ns_padding(server, 4, "urn:szlab:parallel-lock-test")
+    nodes = add_nodes(server, namespace_index, definitions)
+    server.start()
+    simulator = SzlabHandshakeSimulator(
+        endpoint,
+        workflow="szlab_stack_s05_s06_workflow",
+        delay_ms=0,
+    )
+    try:
+        simulator.connect(timeout=3.0)
+        simulator.initialize()
+
+        nodes["S08倒料产品选择"].set_value(ua.Variant(1, ua.VariantType.Int32))
+        nodes["任务号"].set_value(ua.Variant(25, ua.VariantType.Int32))
+        nodes["Robot_任务写入完成"].set_value(
+            ua.Variant(True, ua.VariantType.Boolean)
+        )
+        first = simulator.tick(now=1.0) + simulator.tick(now=1.01)
+        assert [(event.phase, event.details["product_type"]) for event in first] == [
+            ("accepted", 1),
+            ("completed", 1),
+        ]
+
+        # 同一设备仍被第一条分支占用，改参数不能绕过复位直接开始第二条。
+        nodes["S08倒料产品选择"].set_value(ua.Variant(2, ua.VariantType.Int32))
+        assert simulator.tick(now=1.02) == []
+        assert nodes["Robot_任务完成"].get_value() == 25
+
+        nodes["Robot_任务写入完成"].set_value(
+            ua.Variant(False, ua.VariantType.Boolean)
+        )
+        simulator.tick(now=1.03)
+        nodes["Robot_任务写入完成"].set_value(
+            ua.Variant(True, ua.VariantType.Boolean)
+        )
+        second = simulator.tick(now=1.04) + simulator.tick(now=1.05)
+        assert [(event.phase, event.details["product_type"]) for event in second] == [
+            ("accepted", 2),
+            ("completed", 2),
+        ]
     finally:
         simulator.disconnect()
         server.stop()

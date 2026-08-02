@@ -5,7 +5,7 @@
 
 // 版本 marker —— F12 Console 里能看到. 如果你看到的是旧样式但这一行没打印,
 // 说明你的浏览器根本没执行这份 app.js (纯缓存旧文件).
-const GUI_BUILD = "2026-07-31_szlab-workflow-debug";
+const GUI_BUILD = "2026-08-02_parallel-robot-lock";
 console.log("%c[OpcUaSim] GUI build " + GUI_BUILD, "color:#3ecf8e;font-weight:bold");
 
 const $ = (id) => document.getElementById(id);
@@ -519,6 +519,7 @@ const SZLAB_S04_WORKFLOWS = new Set([
   "szlab_magnetic_stirring_workflow",
   "szlab_robot_action_workflow",
   "s04_robot_stirring_workflow",
+  "szlab_stack_s05_s06_workflow",
   "szlab_robot_liquid_stirring_demo_workflow",
 ]);
 const SZLAB_PUMP_WORKFLOWS = new Set([

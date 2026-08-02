@@ -12,6 +12,7 @@ from szlab_handshake_agent import (
     S07_PARAMS_WRITTEN,
     S07_PROCESS,
     S08_CAP_STORAGE_SLOT,
+    S08_POUR_PRODUCT_TYPE,
     S08_PARAMS_WRITTEN,
     S08_PROCESS,
     S09_PARAMS_WRITTEN,
@@ -76,9 +77,10 @@ def reset_robot(
 
 
 def test_protocol_catalog_matches_reference_handshaker():
-    assert len(SUPPORTED_ACTIONS) == 19
+    assert len(SUPPORTED_ACTIONS) == 20
     assert len(WORKFLOW_IDS) == 13
-    assert set(ROBOT_ACTION_BY_TASK) == {7, 8, 11, 12, 13, 15, 16}
+    assert set(ROBOT_ACTION_BY_TASK) == {7, 8, 11, 12, 13, 15, 16, 25}
+    assert ROBOT_ACTION_BY_TASK[25] == "szlab_mixer_robot.submit_pour_from_s08"
     simulator, nodes = make_simulator()
     assert nodes["Robot_任务写入完成"].value is False
 
@@ -150,6 +152,83 @@ def test_robot_liquid_stirring_demo_enables_and_runs_all_five_actions():
         ("szlab_mixer_stirrer.run_stirring", "completed")
     ]
     assert nodes[s04_done(position)].value is True
+
+
+def test_parallel_stack_revision_serializes_robot_pours_then_stirs():
+    simulator = SzlabHandshakeSimulator(
+        "opc.tcp://unused",
+        workflow="szlab_stack_s05_s06_workflow",
+        position=1,
+        pump=1,
+        delay_ms=0,
+    )
+    nodes = {name: FakeNode(0) for name in simulator.required_names}
+    simulator.nodes = nodes
+    simulator._prepare_capabilities()
+    simulator.initialize()
+
+    assert simulator.enabled_components == frozenset(
+        {"photo", "s06", "robot", "s04"}
+    )
+    assert simulator.enabled_robot_tasks == frozenset({25})
+    assert simulator.s04_positions == frozenset({1})
+    assert S08_POUR_PRODUCT_TYPE in simulator.required_names
+    assert nodes["S05加工完成"].value is True
+    assert nodes[S06_BEAKER_SENSOR].value is True
+
+    # 两条并行分支竞争同一 Robot 锁。第一份倒料未复位时，第二份不能接单。
+    nodes[S08_POUR_PRODUCT_TYPE].value = 1
+    nodes["任务号"].value = 25
+    nodes["Robot_任务写入完成"].value = True
+    first_accepted = simulator.tick(now=1.0)
+    first_completed = simulator.tick(now=1.0)
+    assert [
+        (event.action, event.phase, event.details["product_type"])
+        for event in first_accepted + first_completed
+    ] == [
+        ("szlab_mixer_robot.submit_pour_from_s08", "accepted", 1),
+        ("szlab_mixer_robot.submit_pour_from_s08", "completed", 1),
+    ]
+
+    nodes[S08_POUR_PRODUCT_TYPE].value = 2
+    assert simulator.tick(now=1.01) == []
+    assert nodes["Robot_任务完成"].value == 25
+
+    nodes["Robot_任务写入完成"].value = False
+    reset = simulator.tick(now=1.02)
+    assert [(event.phase, event.details["product_type"]) for event in reset] == [
+        ("reset", 1)
+    ]
+
+    nodes["Robot_任务写入完成"].value = True
+    second_accepted = simulator.tick(now=1.03)
+    second_completed = simulator.tick(now=1.03)
+    assert [
+        (event.phase, event.details["product_type"])
+        for event in second_accepted + second_completed
+    ] == [("accepted", 2), ("completed", 2)]
+
+    nodes["Robot_任务写入完成"].value = False
+    simulator.tick(now=1.04)
+    nodes[S08_POUR_PRODUCT_TYPE].value = 3
+    nodes["Robot_任务写入完成"].value = True
+    assert simulator.tick(now=1.05) == []
+    assert nodes["Robot_任务允许写入"].value is True
+    nodes["Robot_任务写入完成"].value = False
+
+    # join 之后的 S04 动作仍按 revision 中的 30 秒 duration 反馈。
+    nodes[s04_duration(1)].value = 30_000
+    nodes[s04_process(1)].value = 3
+    nodes[s04_params_written(1)].value = True
+    accepted = simulator.tick(now=2.0)
+    assert [(event.action, event.phase) for event in accepted] == [
+        ("szlab_mixer_stirrer.run_stirring", "accepted")
+    ]
+    assert simulator.tick(now=31.99) == []
+    completed = simulator.tick(now=32.0)
+    assert [(event.action, event.phase) for event in completed] == [
+        ("szlab_mixer_stirrer.run_stirring", "completed")
+    ]
 
 
 def test_robot_s04_place_and_pick_update_sensor_and_reset_with_retained_task():
