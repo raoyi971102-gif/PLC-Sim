@@ -19,29 +19,17 @@ OPC UA 客户端地址仍是 `opc.tcp://81.69.12.254:4855/xuse_sim`（或域名�
 
 国外部署继续用已有的 `SSH_HOST` / `SSH_USER` / `SSH_KEY`（及可选 `SSH_PORT`）。
 
-## 2. CNB 密钥仓库
+## 2. CNB 部署密钥（private 仓）
 
-1. 在 cnb.cool 创建**密钥仓库**，建议名：`emoera/plc-sim-secrets`
-2. Web 界面新建文件 `deploy-cn.yml`（不可本地 git push 进密钥仓）：
+实际使用的是 **private** 仓 [`emoera/plc-sim-deploy-env`](https://cnb.cool/emoera/plc-sim-deploy-env) 里的 `deploy-cn.yml`（可用 git 推送，避免密钥仓 Web 编辑弄坏私钥换行导致 `error in libcrypto`）。
 
-```yaml
-LOGIN_USER: root
-PRIVATE_KEY: |
-  -----BEGIN OPENSSH PRIVATE KEY-----
-  ...粘贴能登录 81.69.12.254 的私钥全文...
-  -----END OPENSSH PRIVATE KEY-----
-allow_slugs:
-  - emoera/PLC-Sim
-allow_images:
-  - tencentcom/rsync
-allow_branches:
-  - main
-```
+[`.cnb.yml`](../.cnb.yml) 的 imports：
 
-3. 确认 [`.cnb.yml`](../.cnb.yml) 里的 `imports` 路径与密钥仓一致：
-   `https://cnb.cool/emoera/plc-sim-secrets/-/blob/main/deploy-cn.yml`
+`https://cnb.cool/emoera/plc-sim-deploy-env/-/blob/main/deploy-cn.yml`
 
-国内机若已放入 `~/.ssh/opcuasim_deploy.pub`，可复用对应私钥；否则生成新密钥对并写入 `root` 的 `authorized_keys`。
+文件内容需含 `LOGIN_USER`、`PRIVATE_KEY`（OpenSSH 私钥全文），以及可选的 `allow_slugs` / `allow_images` / `allow_branches`。
+
+国内机 `authorized_keys` 需包含对应公钥（本机一般为 `~/.ssh/opcuasim_deploy.pub`）。
 
 ## 3. 验证
 

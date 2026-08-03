@@ -1,5 +1,5 @@
 # CNB：main 被 GitHub Actions 同步过来后，部署到国内机 81.69.12.254
-# 密钥在 emoera/plc-sim-secrets 的 deploy-cn.yml（LOGIN_USER / PRIVATE_KEY）
+# 密钥在 private 仓 emoera/plc-sim-deploy-env（Web 密钥仓编辑易弄坏私钥换行）
 main:
   push:
     - name: deploy-cn
@@ -14,12 +14,10 @@ main:
             echo "$SHORT $(date -u '+%Y-%m-%d %H:%M UTC')" > OpcUaSim/VERSION
             cat OpcUaSim/VERSION
 
-        # imports 放在 rsync 这一步：密钥仓 allow_images 限定了 tencentcom/rsync，
-        # 挂在 pipeline 顶层时 Prepare 阶段还没进该镜像，会拿不到密钥文件。
         - name: rsync-and-restart
           image: tencentcom/rsync
           imports:
-            - https://cnb.cool/emoera/plc-sim-secrets/-/blob/main/deploy-cn.yml
+            - https://cnb.cool/emoera/plc-sim-deploy-env/-/blob/main/deploy-cn.yml
           settings:
             user: $LOGIN_USER
             key: $PRIVATE_KEY
