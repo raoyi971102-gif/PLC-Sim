@@ -1515,7 +1515,16 @@ def main() -> int:
         import webbrowser
         threading.Timer(1.2, lambda: webbrowser.open(f"http://{args.host}:{args.port}/")).start()
 
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    # PyInstaller ``--windowed`` applications may expose no stdout/stderr.
+    # Disable Uvicorn's terminal color probe, which otherwise calls
+    # ``sys.stdout.isatty()`` and crashes before the GUI server starts.
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        log_level="warning",
+        use_colors=False,
+    )
     return 0
 
 
