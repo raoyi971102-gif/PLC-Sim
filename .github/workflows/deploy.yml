@@ -6,6 +6,7 @@ on:
     paths:
       - 'OpcUaSim/**'
       - '.github/workflows/deploy.yml'
+      - '.cnb.yml'
   workflow_dispatch:
 
 env:
@@ -127,3 +128,24 @@ jobs:
 
       - name: 提示
         run: echo "部署完成。GUI 托管模式下 Server 和 Agent 需要到网页上重新启动。"
+
+  # 手动部署时把当前 main 同步到 cnb.cool；国内机由 CNB 的 .cnb.yml 接手部署。
+  sync_cnb:
+    needs: test
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync main to cnb.cool
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+          CNB_USERNAME: ${{ secrets.CNB_USERNAME || 'cnb' }}
+        run: |
+          set -euo pipefail
+          test -n "${CNB_TOKEN:-}" || { echo "Missing secret CNB_TOKEN" >&2; exit 1; }
+          git remote remove cnb 2>/dev/null || true
+          git remote add cnb "https://${CNB_USERNAME}:${CNB_TOKEN}@cnb.cool/emoera/PLC-Sim.git"
+          git push cnb "HEAD:refs/heads/main" --force
