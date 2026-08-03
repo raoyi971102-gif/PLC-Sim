@@ -37,27 +37,6 @@ main:
               - .env
               - data/uploads/
               - extracted/
-            # tencentcom/rsync 的 script 是「命令列表」，多行 | 块经常只跑到第一行就结束。
-            # 整段放进 bash -lc，保证 pip/chown/restart/健康检查都会执行。
+            # 远程命令保持单行：复杂逻辑在仓库脚本里（随 rsync 一起上去）
             script:
-              - bash -lc 'set -euo pipefail
-                cd /www/wwwroot/OpcUaSim
-                .venv/bin/pip install -q -r requirements.txt
-                mkdir -p data/uploads data/runtime
-                chown -R www:www /www/wwwroot/OpcUaSim
-                pkill -f "/www/wwwroot/OpcUaSim/server\\.py" || true
-                pkill -f "/www/wwwroot/OpcUaSim/[a-z_]*handshake_agent\\.py" || true
-                OLD_PID="$(systemctl show -p MainPID --value opcuasim-gui || true)"
-                systemctl restart opcuasim-gui
-                for _ in $(seq 30); do
-                  sleep 1
-                  NEW_PID="$(systemctl show -p MainPID --value opcuasim-gui || true)"
-                  [ -n "$NEW_PID" ] && [ "$NEW_PID" != "0" ] && [ "$NEW_PID" != "$OLD_PID" ] || continue
-                  if curl -fsS http://127.0.0.1:18765/api/health >/dev/null 2>&1; then
-                    echo "GUI 已恢复 (pid $OLD_PID -> $NEW_PID)"
-                    exit 0
-                  fi
-                done
-                echo "GUI 未在 30 秒内恢复" >&2
-                systemctl status opcuasim-gui --no-pager || true
-                exit 1'
+              - bash /www/wwwroot/OpcUaSim/scripts/cnb_post_deploy.sh
