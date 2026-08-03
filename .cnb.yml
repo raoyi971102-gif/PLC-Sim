@@ -3,8 +3,6 @@
 main:
   push:
     - name: deploy-cn
-      imports:
-        - https://cnb.cool/emoera/plc-sim-secrets/-/blob/main/deploy-cn.yml
       stages:
         - name: version
           script: |
@@ -16,8 +14,12 @@ main:
             echo "$SHORT $(date -u '+%Y-%m-%d %H:%M UTC')" > OpcUaSim/VERSION
             cat OpcUaSim/VERSION
 
+        # imports 放在 rsync 这一步：密钥仓 allow_images 限定了 tencentcom/rsync，
+        # 挂在 pipeline 顶层时 Prepare 阶段还没进该镜像，会拿不到密钥文件。
         - name: rsync-and-restart
           image: tencentcom/rsync
+          imports:
+            - https://cnb.cool/emoera/plc-sim-secrets/-/blob/main/deploy-cn.yml
           settings:
             user: $LOGIN_USER
             key: $PRIVATE_KEY
