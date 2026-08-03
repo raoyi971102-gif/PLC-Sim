@@ -11,13 +11,16 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11']
     steps:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: OpcUaSim
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
           architecture: x64
       - name: 校验标签与包版本
         working-directory: OpcUaSim
@@ -30,8 +33,39 @@ jobs:
         working-directory: OpcUaSim
         run: |
           python -m pip install --upgrade pip
-          python -m pip install '.[test]'
+          python -m pip install -c packaging/constraints.txt '.[test]'
           python -m pytest -q
+
+  python-package:
+    needs: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: OpcUaSim
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: OpcUaSim
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - name: 构建并校验 Python 包
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'build==1.3.0' 'twine==6.2.0'
+          python -m build --outdir artifacts
+          python -m twine check artifacts/*
+          python -m pip install -c packaging/constraints.txt artifacts/*.whl
+          package_version="$(python -c 'import opcua_sim; print(opcua_sim.__version__)')"
+          tag_version="${GITHUB_REF_NAME#opcua-sim-v}"
+          test "$package_version" = "$tag_version"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpcUaSim-Python
+          path: OpcUaSim/artifacts/*
+          if-no-files-found: error
 
   windows:
     needs: test
@@ -50,7 +84,7 @@ jobs:
       - name: 安装构建依赖
         run: |
           python -m pip install --upgrade pip
-          python -m pip install . "pyinstaller>=6.10,<7"
+          python -m pip install -c packaging/constraints.txt . pyinstaller
       - name: 冻结 Windows 应用
         run: >-
           pyinstaller packaging/frozen_entry.py
@@ -69,6 +103,11 @@ jobs:
           choco install innosetup --no-progress -y
           $version = $env:GITHUB_REF_NAME -replace '^opcua-sim-v', ''
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" "packaging\windows-installer.iss"
+      - name: 校验 Windows 安装程序
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^opcua-sim-v', ''
+          python packaging/verify_artifact.py windows "artifacts/OpcUaSim-Setup-Windows-x64-v$version.exe" --version $version
       - uses: actions/upload-artifact@v4
         with:
           name: OpcUaSim-Windows-x64
@@ -100,7 +139,7 @@ jobs:
       - name: 安装构建依赖
         run: |
           python -m pip install --upgrade pip
-          python -m pip install . "pyinstaller>=6.10,<7"
+          python -m pip install -c packaging/constraints.txt . pyinstaller
       - name: 冻结 macOS 应用
         run: >-
           pyinstaller packaging/frozen_entry.py
@@ -118,6 +157,10 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#opcua-sim-v}"
           bash packaging/build_macos_dmg.sh "$version" "${{ matrix.arch }}"
+      - name: 校验 macOS 安装程序
+        run: |
+          version="${GITHUB_REF_NAME#opcua-sim-v}"
+          python packaging/verify_artifact.py macos "artifacts/OpcUaSim-macOS-${{ matrix.arch }}-v${version}.dmg" --version "$version" --arch "${{ matrix.arch }}"
       - uses: actions/upload-artifact@v4
         with:
           name: OpcUaSim-macOS-${{ matrix.arch }}
@@ -125,7 +168,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [windows, macos]
+    needs: [python-package, windows, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -144,6 +187,7 @@ jobs:
           - Windows x64：运行 `OpcUaSim-Setup-Windows-x64-*.exe`
           - Apple Silicon Mac：下载 `OpcUaSim-macOS-arm64-*.dmg`
           - Intel Mac：下载 `OpcUaSim-macOS-x64-*.dmg`
+          - Python 3.10+：下载 wheel 后执行 `pip install unilab_opcua_sim-*.whl`
 
           当前安装包没有商业代码签名证书。Windows 可能显示 SmartScreen 提示；
           macOS 使用临时签名但未经过 Apple 公证，首次请按住 Control 点击应用并选择“打开”。

@@ -41,6 +41,13 @@ python -m pip install \
   "git+https://github.com/raoyi971102-gif/PLC-Sim.git#subdirectory=OpcUaSim"
 ```
 
+每个 `opcua-sim-v*` GitHub Release 也会附带经过校验的 wheel 和源码包；下载
+`unilab_opcua_sim-*-py3-none-any.whl` 后可直接执行：
+
+```bash
+python -m pip install ./unilab_opcua_sim-*-py3-none-any.whl
+```
+
 安装后使用统一命令；不传子命令时默认启动 Web GUI：
 
 ```bash
