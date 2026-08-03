@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 try:
@@ -31,6 +33,21 @@ def test_package_version_sources_match() -> None:
     assert isinstance(version_assignment.value, ast.Constant)
 
     assert project["project"]["version"] == version_assignment.value.value
+
+
+def test_project_version_reader_matches_package_metadata() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(PROJECT_DIRECTORY / "packaging" / "project_version.py"),
+            str(PROJECT_DIRECTORY / "pyproject.toml"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.strip() == "0.2.4"
 
 
 def test_one_click_requirements_use_native_release_constraints() -> None:
