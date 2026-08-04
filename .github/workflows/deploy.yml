@@ -91,8 +91,7 @@ jobs:
               "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$REMOTE_DIR"
-          .venv/bin/python -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 11) else "OpcUaSim requires Python 3.11.x; rebuild the remote .venv")'
-          .venv/bin/pip install -q -r requirements.txt
+          bash scripts/ensure_deploy_venv.sh "$REMOTE_DIR"
           chown -R www:www "$REMOTE_DIR"
 
           # GUI 托管模式下 Server/Agent 是 GUI 的子进程。GUI 被杀时它们会变成孤儿

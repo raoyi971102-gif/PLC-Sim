@@ -34,8 +34,22 @@ OPC UA 客户端地址仍是 `opc.tcp://81.69.12.254:4855/xuse_sim`（或域名�
 ## 3. 服务器 Python 版本
 
 国内、国外服务器的 `/www/wwwroot/OpcUaSim/.venv` 都必须由 Python 3.11 创建。
-部署脚本会先做精确版本检查，3.10、3.12 或其他版本会停止部署并给出错误，
-不会在运行中自动替换环境。可在维护窗口中保留旧环境并重建：
+部署脚本会先做精确版本检查。发现 3.10、3.12 或其他版本时，如果服务器上
+存在 `python3.11`，会先在临时目录创建新环境并安装全部依赖，成功后再原子替换
+`.venv`；创建或安装失败不会移动旧环境。旧环境会暂存为
+`.venv-before-python311-*`，下一次 rsync 部署时自动清理。
+
+服务器必须预先安装 Python 3.11 及其 venv 模块；如果解释器不在 `PATH`，可在
+手动运行迁移脚本时把 `OPCUASIM_PYTHON` 设置为它的绝对路径。也可以在维护窗口
+中直接迁移：
+
+```bash
+cd /www/wwwroot/OpcUaSim
+OPCUASIM_PYTHON=/opt/python3.11/bin/python3.11 \
+  bash scripts/ensure_deploy_venv.sh "$PWD"
+```
+
+或者完全手动执行：
 
 ```bash
 cd /www/wwwroot/OpcUaSim

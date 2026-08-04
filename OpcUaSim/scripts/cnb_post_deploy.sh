@@ -6,8 +6,7 @@ set -euo pipefail
 ROOT=/www/wwwroot/OpcUaSim
 cd "$ROOT"
 
-.venv/bin/python -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 11) else "OpcUaSim requires Python 3.11.x; rebuild the remote .venv")'
-.venv/bin/pip install -q -r requirements.txt
+bash scripts/ensure_deploy_venv.sh "$ROOT"
 mkdir -p data/uploads data/runtime
 chown -R www:www "$ROOT"
 
