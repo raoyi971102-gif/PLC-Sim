@@ -31,7 +31,23 @@ OPC UA 客户端地址仍是 `opc.tcp://81.69.12.254:4855/xuse_sim`（或域名�
 
 国内机 `authorized_keys` 需包含对应公钥（本机一般为 `~/.ssh/opcuasim_deploy.pub`）。
 
-## 3. 验证
+## 3. 服务器 Python 版本
+
+国内、国外服务器的 `/www/wwwroot/OpcUaSim/.venv` 都必须由 Python 3.11 创建。
+部署脚本会先做精确版本检查，3.10、3.12 或其他版本会停止部署并给出错误，
+不会在运行中自动替换环境。可在维护窗口中保留旧环境并重建：
+
+```bash
+cd /www/wwwroot/OpcUaSim
+.venv/bin/python --version
+mv .venv .venv-before-python311
+python3.11 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+确认新服务正常后，再自行归档或移除旧环境。
+
+## 4. 验证
 
 1. 推送到 GitHub `main` → 只跑 `test`
 2. Actions → **OpcUaSim CI / 手动部署** → **Run workflow**

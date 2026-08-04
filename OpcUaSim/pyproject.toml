@@ -7,7 +7,7 @@ name = "unilab-opcua-sim"
 version = "0.2.4"
 description = "CSV-driven OPC UA Server, Web GUI, and PLC handshake simulators"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.12"
 dependencies = [
   "opcua==0.98.13",
   "PyYAML>=6.0,<7",
@@ -19,7 +19,6 @@ dependencies = [
 [project.optional-dependencies]
 test = [
   "pytest>=8.0",
-  "tomli>=2.0; python_version<'3.11'",
 ]
 
 [project.scripts]

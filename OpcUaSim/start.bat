@@ -14,7 +14,7 @@ chcp 65001 > nul
 set PYTHONIOENCODING=utf-8
 call "%~dp0scripts\find_python.bat"
 if "%PY%"=="" (
-    echo [X] Python not found. Run setup_venv.bat or install Python 3.10+.
+    echo [X] Python 3.11 not found. Run setup_venv.bat or install Python 3.11.
     exit /b 1
 )
 

@@ -8,7 +8,7 @@ opcuasim_log() {
 }
 
 opcuasim_python_is_supported() {
-    "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' \
+    "$1" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 11) else 1)' \
         >/dev/null 2>&1
 }
 
@@ -29,9 +29,9 @@ opcuasim_find_python() {
         fi
     fi
 
-    # Prefer the broadly supported versions before newer interpreters because
-    # the OPC UA dependency also needs to support the selected Python release.
-    for candidate in python3.12 python3.11 python3.10 python3.13 python3.14 python3; do
+    # OpcUaSim intentionally supports only Python 3.11. The generic python3
+    # fallback is accepted only when it resolves to a 3.11 interpreter.
+    for candidate in python3.11 python3; do
         resolved="$(command -v "$candidate" 2>/dev/null || true)"
         if [ -n "$resolved" ] && opcuasim_python_is_supported "$resolved"; then
             printf '%s\n' "$resolved"
@@ -67,16 +67,16 @@ opcuasim_ensure_venv() {
     if [ ! -x "$venv_python" ]; then
         bootstrap_python="$(opcuasim_find_python || true)"
         if [ -z "$bootstrap_python" ]; then
-            opcuasim_log "[X] 未找到 Python 3.10 或更高版本。"
-            opcuasim_log "    请先通过 python.org 或 Homebrew 安装 Python 3.10+。"
+            opcuasim_log "[X] 未找到 Python 3.11。OpcUaSim 仅支持 Python 3.11.x。"
+            opcuasim_log "    请先通过 python.org 或 Homebrew 安装 Python 3.11。"
             return 1
         fi
 
         opcuasim_log "[1/2] 创建 Python 虚拟环境: $venv_dir"
         "$bootstrap_python" -m venv "$venv_dir"
     elif ! opcuasim_python_is_supported "$venv_python"; then
-        opcuasim_log "[X] 现有虚拟环境的 Python 版本低于 3.10: $venv_dir"
-        opcuasim_log "    请移走该 .venv 后重新双击启动器。"
+        opcuasim_log "[X] 现有虚拟环境不是 Python 3.11: $venv_dir"
+        opcuasim_log "    请移走该 .venv 后，用 Python 3.11 重新双击启动器。"
         return 1
     fi
 

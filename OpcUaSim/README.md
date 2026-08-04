@@ -28,7 +28,7 @@ Windows 安装后可从开始菜单启动。macOS 打开 DMG 后把 `OpcUaSim.ap
 
 ### pip 安装
 
-需要 Python 3.10 或更高版本。从已克隆的仓库安装：
+仅支持 Python 3.11.x（不支持 3.10、3.12 或其他版本）。从已克隆的仓库安装：
 
 ```bash
 python -m pip install ./OpcUaSim
@@ -77,13 +77,15 @@ wheel 中的演示 CSV、YAML 配置和 GUI 静态文件为只读包资源。上
 
 ### macOS 一键启动
 
-需要 Python 3.10 或更高版本。进入 `OpcUaSim` 目录后，在 Finder 中双击：
+需要 Python 3.11.x。进入 `OpcUaSim` 目录后，在 Finder 中双击：
 
 - `start_gui.command`：推荐入口，启动 Web GUI 并自动打开浏览器；
 - `start_all.command`：同时启动 OPC UA Server 和默认 XUSE Handshake Agent。
 
 首次启动会自动创建 `.venv` 并安装 `requirements.txt`，后续启动会复用环境；
 依赖文件变化时会自动同步，不需要手动运行 Python 文件。
+如果旧 `.venv` 由其他 Python 版本创建，启动器会停止并提示；移走该目录后，
+用 Python 3.11 重新双击启动器即可。
 
 如果 macOS 首次阻止打开，按住 Control 点击 `.command` 文件，选择“打开”，再确认一次。
 也可以从终端运行：
@@ -105,7 +107,7 @@ Windows，因此 GUI 中依赖 InoProShop 的工程编辑、编译和下载功�
 
 ### Windows 一键安装
 
-需要 Python 3.10 或更高版本：
+需要 Python 3.11.x：
 
 ```bat
 setup_venv.bat
@@ -114,6 +116,8 @@ start_all.bat
 
 `setup_venv.bat` 会在当前目录创建 `.venv` 并安装 `requirements.txt`。
 `start_all.bat` 会分别启动 Server 和 Handshake Agent。
+如果已有 `.venv` 不是 Python 3.11，`setup_venv.bat` 会明确报错；移走旧
+`.venv` 后重新运行即可。
 
 运行端到端验证：
 
@@ -190,7 +194,7 @@ macOS 启动器按以下顺序选择 Python：
 
 1. 项目内 `.venv`
 2. `PYTHON` 环境变量
-3. `PATH` 中的 Python 3.10 或更高版本
+3. `PATH` 中的 Python 3.11
 
 `start_all.command` 默认使用端口 `4855`。如需改端口，可在终端设置
 `OPCUASIM_PORT`；Server 与 Agent 会自动使用相同端口：

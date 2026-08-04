@@ -22,7 +22,7 @@ jobs:
           sparse-checkout: OpcUaSim
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'          # 与服务器上的 3.10.12 对齐
+          python-version: '3.11'
       - name: 安装依赖
         working-directory: OpcUaSim
         run: pip install -r requirements.txt pytest   # pytest 只在 CI 用，不进运行时依赖
@@ -89,6 +89,7 @@ jobs:
               "REMOTE_DIR='$REMOTE_DIR' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$REMOTE_DIR"
+          .venv/bin/python -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 11) else "OpcUaSim requires Python 3.11.x; rebuild the remote .venv")'
           .venv/bin/pip install -q -r requirements.txt
           chown -R www:www "$REMOTE_DIR"
 

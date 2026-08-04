@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.10', '3.11']
+        python-version: ['3.11']
     steps:
       - uses: actions/checkout@v4
         with:
@@ -187,7 +187,7 @@ jobs:
           - Windows x64：运行 `OpcUaSim-Setup-Windows-x64-*.exe`
           - Apple Silicon Mac：下载 `OpcUaSim-macOS-arm64-*.dmg`
           - Intel Mac：下载 `OpcUaSim-macOS-x64-*.dmg`
-          - Python 3.10+：下载 wheel 后执行 `pip install unilab_opcua_sim-*.whl`
+          - Python 3.11：下载 wheel 后执行 `pip install unilab_opcua_sim-*.whl`
 
           当前安装包没有商业代码签名证书。Windows 可能显示 SmartScreen 提示；
           macOS 使用临时签名但未经过 Apple 公证，首次请按住 Control 点击应用并选择“打开”。

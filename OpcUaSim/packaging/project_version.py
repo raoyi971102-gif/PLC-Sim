@@ -1,4 +1,4 @@
-"""Read ``project.version`` without requiring Python 3.11 or TOML extras."""
+"""Read ``project.version`` without importing the package under construction."""
 
 from __future__ import annotations
 
