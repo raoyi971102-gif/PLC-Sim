@@ -11,9 +11,9 @@ from szlab_handshake_agent import WORKFLOW_IDS
 
 
 def test_workflow_catalog_matches_agent_and_gui() -> None:
-    html = (
-        Path(__file__).parents[1] / "gui" / "static" / "index.html"
-    ).read_text(encoding="utf-8")
+    html = (Path(__file__).parents[1] / "gui" / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
 
     assert SZLAB_WORKFLOW_IDS == WORKFLOW_IDS
     for workflow_id in WORKFLOW_IDS:
@@ -21,34 +21,34 @@ def test_workflow_catalog_matches_agent_and_gui() -> None:
 
 
 def test_robot_liquid_stirring_demo_exposes_position_and_pump_options() -> None:
-    app_js = (
-        Path(__file__).parents[1] / "gui" / "static" / "app.js"
-    ).read_text(encoding="utf-8")
+    app_js = (Path(__file__).parents[1] / "gui" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
     workflow_id = "szlab_robot_liquid_stirring_demo_workflow"
-    s04_workflows = app_js.split(
-        "const SZLAB_S04_WORKFLOWS", maxsplit=1
-    )[1].split("]);", maxsplit=1)[0]
-    pump_workflows = app_js.split(
-        "const SZLAB_PUMP_WORKFLOWS", maxsplit=1
-    )[1].split("]);", maxsplit=1)[0]
+    s04_workflows = app_js.split("const SZLAB_S04_WORKFLOWS", maxsplit=1)[1].split(
+        "]);", maxsplit=1
+    )[0]
+    pump_workflows = app_js.split("const SZLAB_PUMP_WORKFLOWS", maxsplit=1)[1].split(
+        "]);", maxsplit=1
+    )[0]
 
     assert workflow_id in s04_workflows
     assert workflow_id in pump_workflows
 
 
-def test_parallel_stack_revision_exposes_position_and_pump_options() -> None:
-    app_js = (
-        Path(__file__).parents[1] / "gui" / "static" / "app.js"
-    ).read_text(encoding="utf-8")
+def test_official_stack_workflow_exposes_only_pump_options() -> None:
+    app_js = (Path(__file__).parents[1] / "gui" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
     workflow_id = "szlab_stack_s05_s06_workflow"
-    s04_workflows = app_js.split(
-        "const SZLAB_S04_WORKFLOWS", maxsplit=1
-    )[1].split("]);", maxsplit=1)[0]
-    pump_workflows = app_js.split(
-        "const SZLAB_PUMP_WORKFLOWS", maxsplit=1
-    )[1].split("]);", maxsplit=1)[0]
+    s04_workflows = app_js.split("const SZLAB_S04_WORKFLOWS", maxsplit=1)[1].split(
+        "]);", maxsplit=1
+    )[0]
+    pump_workflows = app_js.split("const SZLAB_PUMP_WORKFLOWS", maxsplit=1)[1].split(
+        "]);", maxsplit=1
+    )[0]
 
-    assert workflow_id in s04_workflows
+    assert workflow_id not in s04_workflows
     assert workflow_id in pump_workflows
 
 
@@ -61,6 +61,8 @@ def test_szlab_agent_options_are_forwarded_to_cli() -> None:
         delay_ms=250,
         poll_ms=40,
         s09_remaining_volume_ml=88.5,
+        s07_balance_reading=1.25,
+        s09_balance_reading=2.5,
     )
     cmd = ["python", "szlab_handshake_agent.py"]
 
@@ -73,6 +75,8 @@ def test_szlab_agent_options_are_forwarded_to_cli() -> None:
         "delay_ms": 250,
         "poll_ms": 40,
         "s09_remaining_volume_ml": 88.5,
+        "s07_balance_reading": 1.25,
+        "s09_balance_reading": 2.5,
     }
     assert cmd == [
         "python",
@@ -89,6 +93,10 @@ def test_szlab_agent_options_are_forwarded_to_cli() -> None:
         "40",
         "--s09-remaining-volume-ml",
         "88.5",
+        "--s07-balance-reading",
+        "1.25",
+        "--s09-balance-reading",
+        "2.5",
     ]
 
 

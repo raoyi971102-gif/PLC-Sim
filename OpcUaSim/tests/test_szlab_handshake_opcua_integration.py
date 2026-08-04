@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import socket
+from typing import Any
 
 from opcua import ua
 
 from common import NodeDef
-from server import (
-    add_nodes,
-    build_server,
-    collect_connection_snapshot,
-    register_ns_padding,
-    remove_own_connection_snapshot,
-    write_connection_snapshot,
+from server import add_nodes, build_server, register_ns_padding
+from szlab_handshake_agent import (
+    ROBOT_TASK_NUMBER,
+    ROBOT_WRITE_DONE,
+    S04_ROBOT_POSITION,
+    S09_PARAMS_WRITTEN,
+    S09_PROCESS,
+    S09_WORKFLOW,
+    OpcUaVariableAdapter,
+    WorkflowHandshakeSimulator,
+    s04_sensor,
 )
-from szlab_handshake_agent import SzlabHandshakeSimulator
 
 
 def _free_port() -> int:
@@ -22,184 +26,130 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def test_robot_handshake_against_real_opcua_server(tmp_path):
+class _MemoryAdapter:
+    def __init__(self, values: dict[str, Any]) -> None:
+        self.values = values
+
+    def read(self, name: str) -> Any:
+        return self.values[name]
+
+    def write(self, name: str, value: Any) -> None:
+        self.values[name] = value
+
+
+def _data_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "BOOLEAN"
+    if isinstance(value, float):
+        return "FLOAT"
+    return "INT32"
+
+
+def _definitions(values: dict[str, Any]) -> list[NodeDef]:
+    return [
+        NodeDef(
+            name,
+            "",
+            "VARIABLE",
+            _data_type(value),
+            f"ns=4;s=上位机通讯|{name}",
+        )
+        for name, value in values.items()
+    ]
+
+
+def _start_server(values: dict[str, Any]):
     port = _free_port()
     endpoint = f"opc.tcp://127.0.0.1:{port}/xuse_sim/"
-    definitions = [
-        NodeDef(
-            "Robot_Home",
-            "",
-            "VARIABLE",
-            "BOOLEAN",
-            "ns=4;s=上位机通讯|Robot_Home",
-        ),
-        NodeDef(
-            "Robot_任务允许写入",
-            "",
-            "VARIABLE",
-            "BOOLEAN",
-            "ns=4;s=上位机通讯|Robot_任务允许写入",
-        ),
-        NodeDef(
-            "Robot_任务写入完成",
-            "",
-            "VARIABLE",
-            "BOOLEAN",
-            "ns=4;s=上位机通讯|Robot_任务写入完成",
-        ),
-        NodeDef(
-            "任务号",
-            "",
-            "VARIABLE",
-            "INT32",
-            "ns=4;s=上位机通讯|任务号",
-        ),
-        NodeDef(
-            "Robot_任务完成",
-            "",
-            "VARIABLE",
-            "INT32",
-            "ns=4;s=上位机通讯|Robot_任务完成",
-        ),
-        NodeDef(
-            "S04取放料编号",
-            "",
-            "VARIABLE",
-            "INT32",
-            "ns=4;s=上位机通讯|S04取放料编号",
-        ),
-        NodeDef(
-            "传感器状态_上位机[2].NO[10]",
-            "",
-            "VARIABLE",
-            "BOOLEAN",
-            "ns=4;s=上位机通讯|传感器状态_上位机[2].NO[10]",
-        ),
-    ]
     server = build_server(endpoint)
     namespace_index = register_ns_padding(server, 4, "urn:szlab:test")
-    nodes = add_nodes(server, namespace_index, definitions)
+    nodes = add_nodes(server, namespace_index, _definitions(values))
     server.start()
-    simulator = SzlabHandshakeSimulator(endpoint, delay_ms=0)
+    return server, nodes, endpoint
+
+
+def test_robot_handshake_through_real_opcua_adapter() -> None:
+    seed = {
+        ROBOT_TASK_NUMBER: 0,
+        S04_ROBOT_POSITION: 0,
+    }
+    blueprint = WorkflowHandshakeSimulator(
+        _MemoryAdapter(seed),
+        workflow="szlab_robot_action_workflow",
+        process_delay=0.0,
+    )
+    values = {**blueprint.initialization_values(), **seed}
+    server, nodes, endpoint = _start_server(values)
+    adapter = OpcUaVariableAdapter(endpoint, "ns=4;s=上位机通讯|")
+    simulator = WorkflowHandshakeSimulator(
+        adapter,
+        workflow="szlab_robot_action_workflow",
+        process_delay=0.0,
+    )
     try:
-        simulator.connect(timeout=3.0)
+        adapter.connect()
         simulator.initialize()
+        nodes[S04_ROBOT_POSITION].set_value(ua.Variant(1, ua.VariantType.Int32))
+        nodes[ROBOT_TASK_NUMBER].set_value(ua.Variant(7, ua.VariantType.Int32))
+        nodes[ROBOT_WRITE_DONE].set_value(ua.Variant(True, ua.VariantType.Boolean))
 
-        first_seen = {}
-        connections = collect_connection_snapshot(server, endpoint, first_seen)
-        assert connections["tcp_connection_count"] == 1
-        assert connections["session_count"] == 1
-        assert connections["clients"][0]["host"] == "127.0.0.1"
-        assert isinstance(connections["clients"][0]["port"], int)
-        assert connections["clients"][0]["session_state"] == "Activated"
+        events = simulator.step(now=1.0) + simulator.step(now=1.0)
 
-        state_path = tmp_path / "server-connections.json"
-        write_connection_snapshot(state_path, connections)
-        assert state_path.exists()
-        remove_own_connection_snapshot(state_path)
-        assert not state_path.exists()
-
-        nodes["S04取放料编号"].set_value(ua.Variant(1, ua.VariantType.Int32))
-        nodes["任务号"].set_value(ua.Variant(7, ua.VariantType.Int32))
-        nodes["Robot_任务写入完成"].set_value(
-            ua.Variant(True, ua.VariantType.Boolean)
-        )
-        simulator.tick(now=1.0)
-        simulator.tick(now=1.01)
-
+        assert [(event.phase, event.detail["task_number"]) for event in events] == [
+            ("accepted", 7),
+            ("completed", 7),
+        ]
         assert nodes["Robot_任务完成"].get_value() == 7
         assert nodes["Robot_任务允许写入"].get_value() is False
-        assert nodes["传感器状态_上位机[2].NO[10]"].get_value() is True
+        assert nodes[s04_sensor(1)].get_value() is True
 
-        nodes["Robot_任务写入完成"].set_value(
-            ua.Variant(False, ua.VariantType.Boolean)
-        )
-        simulator.tick(now=1.02)
-
-        assert nodes["任务号"].get_value() == 7
+        nodes[ROBOT_WRITE_DONE].set_value(ua.Variant(False, ua.VariantType.Boolean))
+        simulator.step(now=1.01)
         assert nodes["Robot_任务完成"].get_value() == 0
         assert nodes["Robot_任务允许写入"].get_value() is True
     finally:
-        simulator.disconnect()
+        adapter.disconnect()
         server.stop()
 
 
-def test_parallel_revision_robot_lock_against_real_opcua_server():
-    port = _free_port()
-    endpoint = f"opc.tcp://127.0.0.1:{port}/xuse_sim/"
-    definitions = [
-        NodeDef("Robot_Home", "", "VARIABLE", "BOOLEAN", "ns=4;s=上位机通讯|Robot_Home"),
-        NodeDef(
-            "Robot_任务允许写入",
-            "",
-            "VARIABLE",
-            "BOOLEAN",
-            "ns=4;s=上位机通讯|Robot_任务允许写入",
-        ),
-        NodeDef(
-            "Robot_任务写入完成",
-            "",
-            "VARIABLE",
-            "BOOLEAN",
-            "ns=4;s=上位机通讯|Robot_任务写入完成",
-        ),
-        NodeDef("任务号", "", "VARIABLE", "INT32", "ns=4;s=上位机通讯|任务号"),
-        NodeDef(
-            "Robot_任务完成",
-            "",
-            "VARIABLE",
-            "INT32",
-            "ns=4;s=上位机通讯|Robot_任务完成",
-        ),
-        NodeDef(
-            "S08倒料产品选择",
-            "",
-            "VARIABLE",
-            "INT32",
-            "ns=4;s=上位机通讯|S08倒料产品选择",
-        ),
-    ]
-    server = build_server(endpoint)
-    namespace_index = register_ns_padding(server, 4, "urn:szlab:parallel-lock-test")
-    nodes = add_nodes(server, namespace_index, definitions)
-    server.start()
-    simulator = SzlabHandshakeSimulator(
-        endpoint,
-        workflow="szlab_stack_s05_s06_workflow",
-        delay_ms=0,
+def test_latest_s09_cycle_requires_official_parameter_reset() -> None:
+    seed = {S09_PROCESS: 0, S09_PARAMS_WRITTEN: False}
+    blueprint = WorkflowHandshakeSimulator(
+        _MemoryAdapter(seed),
+        workflow=S09_WORKFLOW,
+        process_delay=0.0,
+    )
+    values = {**blueprint.initialization_values(), **seed}
+    server, nodes, endpoint = _start_server(values)
+    adapter = OpcUaVariableAdapter(endpoint, "ns=4;s=上位机通讯|")
+    simulator = WorkflowHandshakeSimulator(
+        adapter,
+        workflow=S09_WORKFLOW,
+        process_delay=0.0,
     )
     try:
-        simulator.connect(timeout=3.0)
+        adapter.connect()
         simulator.initialize()
+        nodes[S09_PROCESS].set_value(ua.Variant(5, ua.VariantType.Int32))
+        nodes[S09_PARAMS_WRITTEN].set_value(ua.Variant(True, ua.VariantType.Boolean))
 
-        nodes["S08倒料产品选择"].set_value(ua.Variant(1, ua.VariantType.Int32))
-        nodes["任务号"].set_value(ua.Variant(25, ua.VariantType.Int32))
-        nodes["Robot_任务写入完成"].set_value(
-            ua.Variant(True, ua.VariantType.Boolean)
-        )
-        first = simulator.tick(now=1.0) + simulator.tick(now=1.01)
-        assert [(event.phase, event.details["product_type"]) for event in first] == [
-            ("accepted", 1),
-            ("completed", 1),
+        events = simulator.step(now=2.0) + simulator.step(now=2.0)
+
+        assert [(event.phase, event.detail["process"]) for event in events] == [
+            ("accepted", 5),
+            ("completed", 5),
         ]
+        assert nodes["S09工艺完成"].get_value() == 5
 
-        # 同一设备仍被第一条分支占用，改参数不能绕过复位直接开始第二条。
-        nodes["S08倒料产品选择"].set_value(ua.Variant(2, ua.VariantType.Int32))
-        assert simulator.tick(now=1.02) == []
-        assert nodes["Robot_任务完成"].get_value() == 25
-
-        nodes["Robot_任务写入完成"].set_value(
-            ua.Variant(False, ua.VariantType.Boolean)
-        )
-        simulator.tick(now=1.03)
-        nodes["Robot_任务写入完成"].set_value(
-            ua.Variant(True, ua.VariantType.Boolean)
-        )
-        second = simulator.tick(now=1.04) + simulator.tick(now=1.05)
-        assert [(event.phase, event.details["product_type"]) for event in second] == [
-            ("accepted", 2),
-            ("completed", 2),
+        nodes[S09_PARAMS_WRITTEN].set_value(ua.Variant(False, ua.VariantType.Boolean))
+        assert simulator.step(now=2.01) == []
+        nodes[S09_PROCESS].set_value(ua.Variant(0, ua.VariantType.Int32))
+        reset = simulator.step(now=2.02)
+        assert [(event.phase, event.detail["process"]) for event in reset] == [
+            ("reset", 5)
         ]
+        assert nodes["S09工艺完成"].get_value() == 0
+        assert nodes["S09允许加工"].get_value() is True
     finally:
-        simulator.disconnect()
+        adapter.disconnect()
         server.stop()

@@ -106,11 +106,19 @@ SZLAB_WORKFLOW_IDS = (
     "s07_robot_workflow",
     "szlab_s07_solid_addition_workflow",
     "s08_cap_workflow",
-    "szlab_s09_pipetting_workflow",
+    "s09_移液调试",
     "szlab_stack_s05_s06_workflow",
     "szlab_mixer_workflow",
     "szlab_mixer_pump_production",
+    "szlab_material_s06_workflow",
     "szlab_robot_liquid_stirring_demo_workflow",
+    "s07_粉桶与烧杯搬运后固体称量",
+    "s_z_lab_标准物料转运",
+    "s_z_lab_单样品全流程_物料感知",
+)
+SZLAB_WORKFLOW_ALIASES = (
+    "s07_material_dosing",
+    "szlab_s09_pipetting_workflow",
 )
 
 
@@ -1341,13 +1349,15 @@ class AgentStartReq(BaseModel):
     delay_ms: Optional[int] = Field(default=None, ge=0, le=3_600_000)
     poll_ms: Optional[int] = Field(default=None, ge=5, le=60_000)
     s09_remaining_volume_ml: Optional[float] = Field(default=None, gt=0)
+    s07_balance_reading: Optional[float] = None
+    s09_balance_reading: Optional[float] = None
 
 
 def _extend_szlab_command(cmd: List[str], req: AgentStartReq) -> Dict[str, Any]:
     """校验并附加 SZLab 工作流调试参数，返回实际生效的显式覆盖项。"""
     options: Dict[str, Any] = {}
     if req.workflow:
-        if req.workflow not in ("all", *SZLAB_WORKFLOW_IDS):
+        if req.workflow not in ("all", *SZLAB_WORKFLOW_IDS, *SZLAB_WORKFLOW_ALIASES):
             raise HTTPException(400, f"未知 SZLab 工作流: {req.workflow}")
         options["workflow"] = req.workflow
         cmd.extend(["--workflow", req.workflow])
@@ -1358,6 +1368,8 @@ def _extend_szlab_command(cmd: List[str], req: AgentStartReq) -> Dict[str, Any]:
         ("delay_ms", "--delay-ms"),
         ("poll_ms", "--poll-ms"),
         ("s09_remaining_volume_ml", "--s09-remaining-volume-ml"),
+        ("s07_balance_reading", "--s07-balance-reading"),
+        ("s09_balance_reading", "--s09-balance-reading"),
     )
     for field_name, flag in option_specs:
         value = getattr(req, field_name)

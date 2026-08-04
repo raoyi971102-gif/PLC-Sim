@@ -1,51 +1,94 @@
-"""
-SZLab Poly Studio OPC UA 握手仿真驱动。
+#!/usr/bin/env python3
+"""SZLab OPC UA 工作流握手代理。
 
-本进程作为 OPC UA Client 连接已有仿真 Server，并按 Uni-Lab-SZLab 的
-``szlab_workflow_handshake.py`` 模拟 PLC 侧行为。与简单的通用握手不同，
-这里保留了每个工站自己的接单和复位语义：
+用途：
 
-* Robot：支持任务 7/8/11/12/13/15/16，并同步物料在位传感器；
-* S04：支持 1-6 号磁搅位，按上位机写入的磁搅时间反馈完成；
-* S06：参数标志复位即可重新允许加工，工艺号可以保留；
-* S07/S08：返回工艺号，S08 还会等待瓶盖暂存位复位；
-* S09：用持续保留的工艺号接单，避免漏掉约 0.1 秒的参数完成脉冲，
-  同时屏蔽代理启动前已经存在的无脉冲残留工艺号。
+1. ``list``：列出仓库中全部工作流的 PLC/配置先决条件，不连接服务器。
+2. ``check``：只读检查远端 OPC UA 中可自动判定的先决条件。
+3. ``serve``：写入测试先决条件，并监听 PC→PLC 信号，模拟 PLC 握手。
 
-节点优先按实机 NodeId ``ns=4;s=上位机通讯|<变量名>`` 直连；直连失败时
-递归扫描 BrowseName，因此也能连接由本仓库或 Uni-LabOS 测试工具创建的服务器。
+协议目录同步自 Uni-Lab-SZLab ``fc98392``，覆盖 ``workflows`` 目录中全部
+17 个 Python 工作流、37 个唯一动作调用。状态机只依赖 :class:`VariableAdapter`
+这一处 interface；OPC UA、内存测试替身等实现都作为 adapter 接入。
+握手场景名称使用工作流源码中的真实函数名；旧版 S07/S09 场景名仍作为兼容别名：
+
+- ``s07_material_dosing`` → ``s07_粉桶与烧杯搬运后固体称量``
+- ``szlab_s09_pipetting_workflow`` → ``s09_移液调试``
+
+主要动作包括：
+
+- ``szlab_mixer_robot.submit_place_to_s04``（机器人任务号 7）
+- ``szlab_mixer_stirrer.run_stirring``
+- ``szlab_mixer_robot.submit_pick_from_s04``（机器人任务号 8）
+- ``szlab_mixer_photoshotting.take_photo``（当前为只读完成信号）
+- ``szlab_mixer_pump.run_solvent_addition``
+- ``szlab_mixer_robot.submit_place_to_s06``（机器人任务号 11）
+- ``szlab_mixer_robot.submit_pick_from_s06``（机器人任务号 12）
+- ``szlab_mixer_robot.submit_place_to_s071``（机器人任务号 13）
+- ``szlab_mixer_robot.submit_place_to_s072``（机器人任务号 15）
+- ``szlab_mixer_robot.submit_pick_from_s072``（机器人任务号 16）
+- ``szlab_s07_solid_addition.scan_powder_cartridges``（S07 工艺 1）
+- ``szlab_s07_solid_addition.rotate_powder_cartridge_to_feed``（S07 工艺 2）
+- ``szlab_s07_solid_addition.dose_powder``（S07 工艺 3）
+- ``szlab_s08_cap_station.process_cap_with_sample_parts``（S08 工艺 1-6）
+- ``szlab_mixer_pipetting_station.prepare_liquid_station``
+- ``szlab_mixer_pipetting_station.bind_sample_to_station``
+- ``szlab_mixer_pipetting_station.add_liquid``（内部工艺 5→7→8→6）
+- ``szlab_mixer_pipetting_station.release_station``
+- ``szlab_poly_plc.get_stack_status``（只读，无动态握手）
+- ``szlab_mixer_robot.pick_beaker_from_s03``（机器人任务号 6）
+- ``szlab_mixer_robot.place_beaker_to_s06``（机器人任务号 11）
+- ``szlab_mixer_pump.add_solvent_to_beaker``
+- ``szlab_mixer_robot.pick_beaker_from_s06``（机器人任务号 12）
+- ``szlab_mixer_robot.pick``（标准 Site 动作，S071/S03）
+- ``szlab_s07_solid_addition.prepare_powder_cartridge_site``（S07 工艺 2）
+- ``szlab_mixer_robot.place``（标准 Site 动作，S072）
+- ``host_node.transfer_resource``（物理动作成功后的物料系统记账）
+- ``szlab_s07_solid_addition.dose_powder_with_materials``（S07 工艺 3）
+
+建议用 ``--workflow WORKFLOW_ID`` 定向运行单个工作流；选择
+``s06_robot_workflow`` 或 ``szlab_robot_liquid_stirring_demo_workflow`` 时会让 S06
+烧杯传感器从 False 开始，并由任务 11/12 的握手周期切换；选择
+``s09_移液调试``（或兼容别名 ``szlab_s09_pipetting_workflow``）时会初始化
+S09 工位和液体余量，并响应全部内部工艺。原有
+``--s06-robot-workflow``、``--s09-pipetting-workflow`` 参数仍作为兼容别名保留。
+
+本文件不依赖 Uni-Lab-OS 进程，也不创建 OPC UA 节点；它只连接由 CSV
+创建好的节点。请使用包含 ``python-opcua`` 的 unilab Python 环境运行。
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import signal
 import sys
-import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Literal, Optional
-
-from opcua import Client, ua
+from typing import Any, Iterable, Literal, Protocol
 
 try:
-    from .common import load_yaml, setup_logging
-except ImportError:  # Direct `python szlab_handshake_agent.py` compatibility.
-    from common import load_yaml, setup_logging
+    from .common import load_yaml
+except ImportError:  # Direct ``python szlab_handshake_agent.py`` compatibility.
+    from common import load_yaml
 
-
-log = setup_logging("SZLab-Handshake")
+DEFAULT_URL = "opc.tcp://opcua.ideawit.com:4855/xuse_sim"
+DEFAULT_NODE_PREFIX = "ns=4;s=上位机通讯|"
 
 ROBOT_HOME = "Robot_Home"
 ROBOT_WRITE_ALLOWED = "Robot_任务允许写入"
 ROBOT_WRITE_DONE = "Robot_任务写入完成"
 ROBOT_TASK_NUMBER = "任务号"
 ROBOT_TASK_COMPLETE = "Robot_任务完成"
+ROBOT_TOOL_PAYLOAD_SENSOR = "传感器状态_上位机[3].NO[6]"
 S04_ROBOT_POSITION = "S04取放料编号"
+S03_BEAKER_SENSOR = "传感器状态_上位机[0].NO[6]"
+S03_SAMPLE_VIAL_SENSOR = "传感器状态_上位机[1].NO[8]"
 
 S05_DONE = "S05加工完成"
 S05_RESULT = "S05拍照结果"
+S05_MATERIAL_SENSOR = "传感器状态_上位机[3].NO[0]"
 
 S06_READY = "S06准备信号"
 S06_ALLOW = "S06允许加工"
@@ -59,9 +102,14 @@ S06_STORAGE_BOTTLE_SENSOR = {
 }
 
 S071_ROBOT_POSITION = "S071取放料编号"
+S072_ROBOT_PRODUCT = "S072取放料产品"
 S071_SENSOR_BY_SLOT = {
-    slot: f"传感器状态_上位机[3].NO[{slot + 7}]"
-    for slot in range(1, 7)
+    1: "传感器状态_上位机[3].NO[8]",
+    2: "传感器状态_上位机[3].NO[9]",
+    3: "传感器状态_上位机[3].NO[10]",
+    4: "传感器状态_上位机[3].NO[11]",
+    5: "传感器状态_上位机[3].NO[12]",
+    6: "传感器状态_上位机[3].NO[13]",
 }
 S072_SENSOR_BY_POSITION = {
     1: "传感器状态_上位机[3].NO[14]",
@@ -73,6 +121,7 @@ S07_ALLOW = "S07允许加工"
 S07_PROCESS = "S07工艺选择"
 S07_PARAMS_WRITTEN = "S07参数写入完成"
 S07_DONE = "S07工艺完成"
+S07_BALANCE_READING = "S07天平读数"
 S07_PROCESS_LABELS = {
     1: "粉罐扫码盘点",
     2: "替换粉罐旋转到进料位",
@@ -86,7 +135,16 @@ S08_PARAMS_WRITTEN = "S08参数写入完成"
 S08_DONE = "S08工艺完成"
 S08_CAP_STORAGE_SLOT = "S082瓶盖暂存位"
 S08_STATION_STATUS = "工站状态[7]"
-S08_POUR_PRODUCT_TYPE = "S08倒料产品选择"
+S08_ROBOT_PRODUCT = "S08取放料产品"
+S08_ROBOT_POSITION = "S08取放料编号"
+S08_POUR_PRODUCT = "S08倒料产品选择"
+S08_CAP_STATION_SENSOR = {
+    1: "传感器状态_上位机[3].NO[14]",
+    2: "传感器状态_上位机[3].NO[15]",
+}
+S08_CAP_STORAGE_SENSOR = {
+    slot: f"传感器状态_上位机[4].NO[{slot - 1}]" for slot in range(1, 6)
+}
 S08_PROCESS_LABELS = {
     1: "500 mL 样品瓶开盖",
     2: "500 mL 样品瓶关盖",
@@ -101,6 +159,26 @@ S09_PARAMS_WRITTEN = "S09参数写入完成"
 S09_DONE = "S09工艺完成"
 S09_ALLOW = "S09允许加工"
 S09_STATION_STATUS = "工站状态[8]"
+S09_TIP_BOX = "S09TIP盒工位编号"
+S09_LIQUID_BOTTLE = "S09液体瓶编号"
+S09_TRANSFER_PRODUCT = "S09取放料产品"
+S09_TRANSFER_POSITION = "S09取放料编号"
+S09_BALANCE_STABLE = "S09天平读数稳定"
+S09_BALANCE_READING = "S09天平读数"
+S09_TIP_BOX_SENSOR = {
+    1: "传感器状态_上位机[4].NO[5]",
+    2: "传感器状态_上位机[4].NO[6]",
+}
+S09_STATION_SENSOR = {
+    position: f"传感器状态_上位机[4].NO[{position + 6}]" for position in range(1, 6)
+}
+
+S02_ROBOT_POSITION = "S02取放料编号"
+S03_ROBOT_PRODUCT = "S03取放料产品"
+S03_ROBOT_POSITION = "S03取放料编号"
+S10_ROBOT_POSITION = "S10取放料编号"
+S11_ROBOT_PRODUCT = "S11取放料产品"
+S11_ROBOT_POSITION = "S11取放料编号"
 S09_PROCESS_LABELS = {
     1: "去安全位1",
     2: "去安全位2",
@@ -113,6 +191,15 @@ S09_PROCESS_LABELS = {
     9: "测密度抽液",
     10: "测密度排液",
 }
+
+
+def s09_remaining_volume(bottle: int) -> str:
+    return f"S09液体瓶{int(bottle)}剩余液量"
+
+
+def s08_cap_cache(slot: int, index: int) -> str:
+    return f"S082_{int(slot)}数据缓存[{int(index)}]"
+
 
 SUPPORTED_ACTIONS = (
     "szlab_mixer_robot.submit_place_to_s04",
@@ -134,8 +221,68 @@ SUPPORTED_ACTIONS = (
     "szlab_s07_solid_addition.dose_powder",
     "szlab_s08_cap_station.process_cap_with_sample_parts",
     "szlab_poly_plc.get_stack_status",
-    "szlab_mixer_robot.submit_pour_from_s08",
+    "szlab_mixer_robot.pick_beaker_from_s03",
+    "szlab_mixer_robot.place_beaker_to_s06",
+    "szlab_mixer_pump.add_solvent_to_beaker",
+    "szlab_mixer_robot.pick_beaker_from_s06",
+    "szlab_mixer_robot.pick",
+    "szlab_s07_solid_addition.prepare_powder_cartridge_site",
+    "szlab_mixer_robot.place",
+    "host_node.transfer_resource",
+    "szlab_s07_solid_addition.dose_powder_with_materials",
+    "szlab_mixer_photoshotting.inspect_beaker",
+    "szlab_mixer_pipetting_station.add_liquid_with_materials",
+    "szlab_mixer_pump.add_solvent_with_materials",
+    "szlab_mixer_robot.pick_beaker",
+    "szlab_mixer_robot.pour_beaker_into_vial",
+    "szlab_mixer_stirrer.stir_beaker",
+    "szlab_s07_solid_addition.dose_powder_with_two_materials",
+    "szlab_s08_cap_station.process_liquid_reagent_100ml_cap_with_material",
+    "szlab_s08_cap_station.process_sample_vial_250ml_cap_with_material",
 )
+
+# 保留首版握手器导出的动作别名，避免既有测试脚本和外部调用方因扩展
+# SUPPORTED_ACTIONS 而被迫按元组下标取值。
+S04_PLACE_ACTION = SUPPORTED_ACTIONS[0]
+S04_STIR_ACTION = SUPPORTED_ACTIONS[1]
+S04_PICK_ACTION = SUPPORTED_ACTIONS[2]
+S06_PUMP_ACTION = SUPPORTED_ACTIONS[4]
+S06_PLACE_ACTION = SUPPORTED_ACTIONS[5]
+S06_PICK_ACTION = SUPPORTED_ACTIONS[6]
+S09_ADD_LIQUID_ACTION = SUPPORTED_ACTIONS[9]
+S07_SOLID_ACTION_BY_PROCESS = {
+    1: SUPPORTED_ACTIONS[14],
+    2: SUPPORTED_ACTIONS[15],
+    3: SUPPORTED_ACTIONS[16],
+}
+S08_CAP_ACTION = SUPPORTED_ACTIONS[17]
+MATERIAL_S03_PICK_ACTION = SUPPORTED_ACTIONS[19]
+MATERIAL_S06_PLACE_ACTION = SUPPORTED_ACTIONS[20]
+MATERIAL_S06_ADD_ACTION = SUPPORTED_ACTIONS[21]
+MATERIAL_S06_PICK_ACTION = SUPPORTED_ACTIONS[22]
+S07_MATERIAL_ROBOT_PICK_ACTION = SUPPORTED_ACTIONS[23]
+S07_MATERIAL_PREPARE_ACTION = SUPPORTED_ACTIONS[24]
+S07_MATERIAL_ROBOT_PLACE_ACTION = SUPPORTED_ACTIONS[25]
+S07_MATERIAL_COMMIT_ACTION = SUPPORTED_ACTIONS[26]
+S07_MATERIAL_DOSE_ACTION = SUPPORTED_ACTIONS[27]
+SINGLE_SAMPLE_WORKFLOW = "s_z_lab_单样品全流程_物料感知"
+STANDARD_TRANSFER_WORKFLOW = "s_z_lab_标准物料转运"
+S07_MATERIAL_WORKFLOW = "s07_粉桶与烧杯搬运后固体称量"
+S09_WORKFLOW = "s09_移液调试"
+SINGLE_SAMPLE_S07_DOSE_ACTION = (
+    "szlab_s07_solid_addition.dose_powder_with_two_materials"
+)
+SINGLE_SAMPLE_S08_LIQUID_CAP_ACTION = (
+    "szlab_s08_cap_station.process_liquid_reagent_100ml_cap_with_material"
+)
+SINGLE_SAMPLE_S08_SAMPLE_CAP_ACTION = (
+    "szlab_s08_cap_station.process_sample_vial_250ml_cap_with_material"
+)
+SINGLE_SAMPLE_S09_ACTION = "szlab_mixer_pipetting_station.add_liquid_with_materials"
+SINGLE_SAMPLE_PUMP_ACTION = "szlab_mixer_pump.add_solvent_with_materials"
+SINGLE_SAMPLE_STIR_ACTION = "szlab_mixer_stirrer.stir_beaker"
+SINGLE_SAMPLE_ROBOT_PICK_ACTION = "szlab_mixer_robot.pick_beaker"
+SINGLE_SAMPLE_ROBOT_POUR_ACTION = "szlab_mixer_robot.pour_beaker_into_vial"
 
 WORKFLOW_IDS = (
     "szlab_magnetic_stirring_workflow",
@@ -146,62 +293,83 @@ WORKFLOW_IDS = (
     "s07_robot_workflow",
     "szlab_s07_solid_addition_workflow",
     "s08_cap_workflow",
-    "szlab_s09_pipetting_workflow",
+    S09_WORKFLOW,
     "szlab_stack_s05_s06_workflow",
     "szlab_mixer_workflow",
     "szlab_mixer_pump_production",
+    "szlab_material_s06_workflow",
     "szlab_robot_liquid_stirring_demo_workflow",
+    S07_MATERIAL_WORKFLOW,
+    STANDARD_TRANSFER_WORKFLOW,
+    SINGLE_SAMPLE_WORKFLOW,
 )
 
-# 组件名同时也是节点发现和轮询的能力组。photo 只负责初始化 S05 的只读
-# 完成信号，没有周期状态机。
+WORKFLOW_ALIASES = {
+    "s07_material_dosing": S07_MATERIAL_WORKFLOW,
+    "szlab_s09_pipetting_workflow": S09_WORKFLOW,
+}
+
 WORKFLOW_COMPONENTS = {
-    "szlab_magnetic_stirring_workflow": frozenset({"s04"}),
+    "szlab_magnetic_stirring_workflow": frozenset({"stirrer"}),
     "szlab_photoshotting_workflow": frozenset({"photo"}),
-    "szlab_robot_action_workflow": frozenset({"robot"}),
-    "s04_robot_stirring_workflow": frozenset({"robot", "s04"}),
-    "s06_robot_workflow": frozenset({"robot", "s06"}),
-    "s07_robot_workflow": frozenset({"robot"}),
+    "szlab_robot_action_workflow": frozenset({"robot_s04"}),
+    "s04_robot_stirring_workflow": frozenset({"robot_s04", "stirrer"}),
+    "s06_robot_workflow": frozenset({"robot_s06", "pump"}),
+    "s07_robot_workflow": frozenset({"robot_s07"}),
     "szlab_s07_solid_addition_workflow": frozenset({"s07"}),
     "s08_cap_workflow": frozenset({"s08"}),
-    "szlab_s09_pipetting_workflow": frozenset({"s09"}),
-    # 同时兼容 python-v1（S05 + S06）和附件中的并行机器人锁 revision。
-    "szlab_stack_s05_s06_workflow": frozenset(
-        {"photo", "s06", "robot", "s04"}
-    ),
-    "szlab_mixer_workflow": frozenset({"s06"}),
-    "szlab_mixer_pump_production": frozenset({"s06"}),
+    S09_WORKFLOW: frozenset({"s09"}),
+    "szlab_stack_s05_s06_workflow": frozenset({"photo", "pump"}),
+    "szlab_mixer_workflow": frozenset({"pump"}),
+    "szlab_mixer_pump_production": frozenset({"pump"}),
+    "szlab_material_s06_workflow": frozenset({"robot_s03", "robot_s06", "pump"}),
     "szlab_robot_liquid_stirring_demo_workflow": frozenset(
-        {"robot", "s06", "s04"}
+        {"robot_s06", "pump", "robot_s04", "stirrer"}
+    ),
+    S07_MATERIAL_WORKFLOW: frozenset({"robot_s03", "robot_s07", "s07"}),
+    STANDARD_TRANSFER_WORKFLOW: frozenset({"robot_standard"}),
+    SINGLE_SAMPLE_WORKFLOW: frozenset(
+        {"robot_standard", "pump", "stirrer", "photo", "s07", "s08", "s09"}
     ),
 }
 ALL_COMPONENTS = frozenset().union(*WORKFLOW_COMPONENTS.values())
+ROBOT_COMPONENTS = frozenset(
+    {"robot_s03", "robot_s04", "robot_s06", "robot_s07", "robot_standard"}
+)
 
-WORKFLOW_ROBOT_TASKS = {
-    "szlab_robot_action_workflow": frozenset({7, 8}),
-    "s04_robot_stirring_workflow": frozenset({7, 8}),
-    "s06_robot_workflow": frozenset({11, 12}),
-    "s07_robot_workflow": frozenset({13, 15, 16}),
-    "szlab_stack_s05_s06_workflow": frozenset({25}),
-    "szlab_robot_liquid_stirring_demo_workflow": frozenset({7, 11, 12}),
+STANDARD_ROBOT_TASK_KIND: dict[int, Literal["pick", "place", "pour"]] = {
+    1: "pick",
+    **{task: "place" if task % 2 else "pick" for task in range(3, 25)},
+    25: "pour",
 }
-ALL_ROBOT_TASKS = frozenset({7, 8, 11, 12, 13, 15, 16, 25})
 
 ROBOT_ACTION_BY_TASK = {
+    6: MATERIAL_S03_PICK_ACTION,
     7: SUPPORTED_ACTIONS[0],
     8: SUPPORTED_ACTIONS[2],
     11: SUPPORTED_ACTIONS[5],
     12: SUPPORTED_ACTIONS[6],
     13: SUPPORTED_ACTIONS[11],
+    14: S07_MATERIAL_ROBOT_PICK_ACTION,
     15: SUPPORTED_ACTIONS[12],
     16: SUPPORTED_ACTIONS[13],
-    25: SUPPORTED_ACTIONS[19],
 }
-S07_ACTION_BY_PROCESS = {
-    1: SUPPORTED_ACTIONS[14],
-    2: SUPPORTED_ACTIONS[15],
-    3: SUPPORTED_ACTIONS[16],
+
+MATERIAL_S06_ACTION_BY_TASK = {
+    6: MATERIAL_S03_PICK_ACTION,
+    11: MATERIAL_S06_PLACE_ACTION,
+    12: MATERIAL_S06_PICK_ACTION,
 }
+
+MATERIAL_S07_ACTION_BY_TASK = {
+    6: S07_MATERIAL_ROBOT_PICK_ACTION,
+    14: S07_MATERIAL_ROBOT_PICK_ACTION,
+    15: S07_MATERIAL_ROBOT_PLACE_ACTION,
+}
+
+
+def s04_station(position: int) -> str:
+    return f"S04{int(position)}"
 
 
 def s04_sensor(position: int) -> str:
@@ -212,1173 +380,1889 @@ def s04_sensor(position: int) -> str:
 
 
 def s04_allow(position: int) -> str:
-    return f"S04{int(position)}允许加工"
+    return f"{s04_station(position)}允许加工"
+
+
+def s04_status(position: int) -> str:
+    return f"{s04_station(position)}磁搅状态"
 
 
 def s04_process(position: int) -> str:
-    return f"S04{int(position)}磁搅工艺选择"
+    return f"{s04_station(position)}磁搅工艺选择"
 
 
 def s04_params_written(position: int) -> str:
-    return f"S04{int(position)}参数写入完成"
+    return f"{s04_station(position)}参数写入完成"
 
 
 def s04_done(position: int) -> str:
-    return f"S04{int(position)}加工完成"
+    return f"{s04_station(position)}加工完成"
 
 
 def s04_duration(position: int) -> str:
+    """S04 磁搅时长节点；驱动以毫秒写入。"""
+
     return f"磁搅时间设置_上位机[{int(position) - 1}]"
 
 
-def s09_remaining_volume(bottle: int) -> str:
-    return f"S09液体瓶{int(bottle)}剩余液量"
-
-
-def s08_cap_cache(slot: int, index: int) -> str:
-    return f"S082_{int(slot)}数据缓存[{int(index)}]"
-
-
-def workflow_components(workflow: str) -> frozenset[str]:
-    workflow = str(workflow or "all")
-    if workflow == "all":
-        return ALL_COMPONENTS
+def s071_sensor(slot: int) -> str:
     try:
-        return WORKFLOW_COMPONENTS[workflow]
+        return S071_SENSOR_BY_SLOT[int(slot)]
     except KeyError as exc:
-        raise ValueError(f"不支持的握手工作流: {workflow}") from exc
+        raise ValueError("S071 位置必须在 1-6 范围内") from exc
 
 
-def workflow_robot_tasks(workflow: str) -> frozenset[int]:
-    workflow = str(workflow or "all")
-    if workflow == "all":
-        return ALL_ROBOT_TASKS
-    if workflow not in WORKFLOW_COMPONENTS:
-        raise ValueError(f"不支持的握手工作流: {workflow}")
-    return WORKFLOW_ROBOT_TASKS.get(workflow, frozenset())
+def s072_sensor(position: int) -> str:
+    try:
+        return S072_SENSOR_BY_POSITION[int(position)]
+    except KeyError as exc:
+        raise ValueError("S072 位置必须在 1-2 范围内") from exc
 
 
-def workflow_s04_positions(workflow: str, position: int) -> frozenset[int]:
+def _linear_bit_sensor(
+    start_array: int, start_bit: int, position: int, count: int, label: str
+) -> str:
     position = int(position)
+    if position not in range(1, count + 1):
+        raise ValueError(f"{label}必须在 1-{count} 范围内")
+    offset = start_bit + position - 1
+    array_index, bit_index = divmod(start_array * 16 + offset, 16)
+    return f"传感器状态_上位机[{array_index}].NO[{bit_index}]"
+
+
+def s02_sensor(position: int) -> str:
+    return _linear_bit_sensor(0, 0, position, 6, "S02 TIP 位置")
+
+
+def s03_sensor(product_type: int, position: int) -> str:
+    start_array, start_bit = (0, 6) if int(product_type) == 1 else (1, 8)
+    return _linear_bit_sensor(start_array, start_bit, position, 18, "S03 容器位置")
+
+
+def s10_sensor(position: int) -> str:
+    return _linear_bit_sensor(4, 12, position, 20, "S10 试剂瓶位置")
+
+
+def s11_sensor(product_type: int, position: int) -> str:
+    start_array, start_bit = (6, 0) if int(product_type) == 1 else (7, 2)
+    return _linear_bit_sensor(start_array, start_bit, position, 18, "S11 容器位置")
+
+
+def s09_transfer_sensor(product_type: int, position: int) -> str:
+    product_type = int(product_type)
+    position = int(position)
+    if product_type == 1:
+        try:
+            return S09_TIP_BOX_SENSOR[position]
+        except KeyError as exc:
+            raise ValueError("S09 TIP 盒位置必须在 1-2 范围内") from exc
+    if product_type == 2:
+        try:
+            return S09_STATION_SENSOR[position]
+        except KeyError as exc:
+            raise ValueError("S09 液体试剂瓶位置必须在 1-5 范围内") from exc
+    if product_type == 3 and position == 1:
+        return S09_STATION_SENSOR[1]
+    raise ValueError("S09 取放料产品/位置不合法")
+
+
+class VariableAdapter(Protocol):
+    """状态机所需的最小变量读写 interface。"""
+
+    def read(self, name: str) -> Any: ...
+
+    def write(self, name: str, value: Any) -> None: ...
+
+
+@dataclass(frozen=True)
+class Requirement:
+    kind: Literal["opcua", "config", "file", "parameter"]
+    subject: str
+    expectation: str
+    expected: Any = None
+    operator: Literal["eq", "in", "gt", "readable", "manual"] = "manual"
+    phase: str = "启动前"
+    note: str = ""
+
+    def evaluate(self, adapter: VariableAdapter) -> tuple[bool | None, Any]:
+        if self.kind != "opcua" or self.operator == "manual":
+            return None, None
+        try:
+            actual = adapter.read(self.subject)
+        except Exception as exc:  # noqa: BLE001 - 报告远端单节点错误
+            return False, f"{type(exc).__name__}: {exc}"
+        if self.operator == "readable":
+            return True, actual
+        if self.operator == "eq":
+            return actual == self.expected, actual
+        if self.operator == "in":
+            return actual in self.expected, actual
+        if self.operator == "gt":
+            try:
+                return actual > self.expected, actual
+            except TypeError:
+                return False, actual
+        raise ValueError(f"未知检查操作: {self.operator}")
+
+
+@dataclass(frozen=True)
+class WorkflowSpec:
+    workflow_id: str
+    actions: tuple[str, ...]
+    requirements: tuple[Requirement, ...]
+
+
+def _opc_eq(
+    subject: str, expected: Any, *, phase: str = "启动前", note: str = ""
+) -> Requirement:
+    return Requirement(
+        kind="opcua",
+        subject=subject,
+        expectation=f"== {expected!r}",
+        expected=expected,
+        operator="eq",
+        phase=phase,
+        note=note,
+    )
+
+
+def _opc_in(subject: str, expected: Iterable[Any], *, note: str = "") -> Requirement:
+    values = tuple(expected)
+    return Requirement(
+        kind="opcua",
+        subject=subject,
+        expectation=f"in {values!r}",
+        expected=values,
+        operator="in",
+        note=note,
+    )
+
+
+def _opc_gt(subject: str, expected: Any, *, note: str = "") -> Requirement:
+    return Requirement(
+        kind="opcua",
+        subject=subject,
+        expectation=f"> {expected!r}",
+        expected=expected,
+        operator="gt",
+        note=note,
+    )
+
+
+def _opc_readable(subject: str, *, note: str = "") -> Requirement:
+    return Requirement(
+        kind="opcua",
+        subject=subject,
+        expectation="节点存在且可读",
+        operator="readable",
+        note=note,
+    )
+
+
+def _manual(
+    kind: Literal["config", "file", "parameter"],
+    subject: str,
+    expectation: str,
+    *,
+    note: str = "",
+) -> Requirement:
+    return Requirement(
+        kind=kind,
+        subject=subject,
+        expectation=expectation,
+        operator="manual",
+        note=note,
+    )
+
+
+def _robot_common() -> tuple[Requirement, ...]:
+    return (
+        _opc_eq(ROBOT_HOME, True),
+        _opc_eq(ROBOT_WRITE_ALLOWED, True),
+        _opc_eq(ROBOT_TASK_COMPLETE, 0, note="开始新任务前完成码应清零"),
+    )
+
+
+def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec, ...]:
+    """返回仓库当前 17 个 Python 工作流的先决条件目录。"""
+
+    position = int(position)
+    pump = int(pump)
     if position not in range(1, 7):
         raise ValueError("position 必须在 1-6 范围内")
-    if workflow == "all":
-        return frozenset(range(1, 7))
-    components = workflow_components(workflow)
-    robot_tasks = workflow_robot_tasks(workflow)
-    if "s04" in components or robot_tasks.intersection({7, 8}):
-        return frozenset({position})
-    return frozenset()
+    if pump not in (1, 2, 3):
+        raise ValueError("pump 必须是 1、2 或 3")
+
+    storage_requirements = tuple(
+        _opc_eq(S06_STORAGE_BOTTLE_SENSOR[index], True)
+        for index in ((1, 2) if pump == 3 else (pump,))
+    )
+    s06_common = (
+        _opc_eq(S06_READY, True),
+        _opc_eq(S06_ALLOW, True),
+        _opc_eq(S06_DONE, False, note="wait_new_cycle_done 要求从 False 开始新周期"),
+        *storage_requirements,
+    )
+    s04_common = (
+        _opc_eq(s04_allow(position), True),
+        _opc_eq(s04_status(position), 1, note="1=空闲；握手器执行期间切为 2=Busy"),
+        _opc_eq(s04_done(position), False, note="新一轮磁搅开始前完成信号应清零"),
+    )
+    standard_transfer_requirements = (
+        *_robot_common(),
+        _manual("config", "standard_actions_enabled", "必须启用标准 robot.pick/place"),
+        _manual(
+            "runtime",
+            "workflow_execution_identity",
+            "OS 必须为每个 robot.pick/place Action 注入有效 WorkflowNodeJob UUID",
+        ),
+    )
+    return (
+        WorkflowSpec(
+            "szlab_magnetic_stirring_workflow",
+            ("szlab_mixer_stirrer.run_stirring",),
+            (
+                _opc_eq(
+                    s04_sensor(position), True, note="实机驱动在加工前后均校验烧杯在位"
+                ),
+                *s04_common,
+            ),
+        ),
+        WorkflowSpec(
+            "szlab_photoshotting_workflow",
+            ("szlab_mixer_photoshotting.take_photo",),
+            (
+                _opc_eq(
+                    S05_MATERIAL_SENSOR, True, note="实机驱动在拍照前后均校验物料在位"
+                ),
+                _opc_eq(S05_DONE, True, note="当前驱动没有拍照启动写入，只等待该信号"),
+                _opc_eq(S05_RESULT, 1, note="1=OK，2=NG"),
+            ),
+        ),
+        WorkflowSpec(
+            "szlab_robot_action_workflow",
+            (
+                "szlab_mixer_robot.submit_place_to_s04",
+                "szlab_mixer_robot.submit_pick_from_s04",
+            ),
+            (
+                *_robot_common(),
+                _opc_eq(
+                    s04_sensor(position),
+                    False,
+                    note="放料前目标位必须为空；握手器放料后会置 True",
+                ),
+            ),
+        ),
+        WorkflowSpec(
+            "s04_robot_stirring_workflow",
+            (
+                "szlab_mixer_robot.submit_place_to_s04",
+                "szlab_mixer_stirrer.run_stirring",
+                "szlab_mixer_robot.submit_pick_from_s04",
+            ),
+            (
+                *_robot_common(),
+                _opc_eq(
+                    s04_sensor(position),
+                    False,
+                    note="放料前为空，放料后 True，取料后恢复 False",
+                ),
+                *s04_common,
+            ),
+        ),
+        WorkflowSpec(
+            "s06_robot_workflow",
+            (
+                "szlab_mixer_robot.submit_place_to_s06",
+                "szlab_mixer_pump.run_solvent_addition",
+                "szlab_mixer_robot.submit_pick_from_s06",
+            ),
+            (
+                *_robot_common(),
+                _opc_eq(
+                    S06_BEAKER_SENSOR, False, note="机器人放料前 S06 加液位必须为空"
+                ),
+                *s06_common,
+                _manual(
+                    "parameter", "skip_level_check", "False 时储液瓶传感器必须在位"
+                ),
+            ),
+        ),
+        WorkflowSpec(
+            "szlab_robot_liquid_stirring_demo_workflow",
+            (
+                "szlab_mixer_robot.submit_place_to_s06",
+                "szlab_mixer_pump.run_solvent_addition",
+                "szlab_mixer_robot.submit_pick_from_s06",
+                "szlab_mixer_robot.submit_place_to_s04",
+                "szlab_mixer_stirrer.run_stirring",
+            ),
+            (
+                *_robot_common(),
+                _opc_eq(
+                    S06_BEAKER_SENSOR, False, note="机器人放料前 S06 加液位必须为空"
+                ),
+                *s06_common,
+                _opc_eq(
+                    s04_sensor(position), False, note="机器人放料前 S04 搅拌位必须为空"
+                ),
+                *s04_common,
+                _manual(
+                    "parameter", "skip_level_check", "False 时储液瓶传感器必须在位"
+                ),
+            ),
+        ),
+        WorkflowSpec(
+            "s07_robot_workflow",
+            (
+                "szlab_mixer_robot.submit_place_to_s071",
+                "szlab_mixer_robot.submit_place_to_s072",
+                "szlab_mixer_robot.submit_pick_from_s072",
+            ),
+            (
+                *_robot_common(),
+                _opc_eq(
+                    "传感器状态_上位机[3].NO[8]",
+                    False,
+                    note="S071 放粉罐目标位初始为空",
+                ),
+                _opc_eq(
+                    "传感器状态_上位机[3].NO[14]", False, note="S072 放料目标位初始为空"
+                ),
+            ),
+        ),
+        WorkflowSpec(
+            "szlab_s07_solid_addition_workflow",
+            (
+                "szlab_s07_solid_addition.scan_powder_cartridges",
+                "szlab_s07_solid_addition.rotate_powder_cartridge_to_feed",
+                "szlab_s07_solid_addition.dose_powder",
+            ),
+            (
+                _opc_eq("S07原点信号", True),
+                _opc_eq("S07允许加工", True),
+                _opc_eq("S07工艺完成", 0, note="每轮开始前完成工艺号应清零"),
+                _opc_readable(
+                    "S07位置1二维码[99]", note="扫码动作需要全部 10×100 个二维码节点"
+                ),
+                _opc_readable(
+                    S07_BALANCE_READING, note="注粉动作完成后会读取并记录最终天平值"
+                ),
+                _manual(
+                    "file",
+                    "s07_powder_params.json",
+                    "default recipe 存在且参数长度正确",
+                ),
+            ),
+        ),
+        WorkflowSpec(
+            "s08_cap_workflow",
+            (
+                "szlab_s08_cap_station.process_cap_with_sample_parts(open)",
+                "szlab_s08_cap_station.process_cap_with_sample_parts(close)",
+            ),
+            (
+                _opc_eq("S08原点信号", True),
+                _opc_eq("S08允许加工", True),
+                _opc_eq(
+                    "S08工艺完成", 0, note="每轮完成后还必须响应 PC 复位并再次清零"
+                ),
+                _opc_eq("S082_1数据缓存[0]", 0, note="开盖前至少一个瓶盖暂存缓存为空"),
+                _opc_eq(
+                    S08_CAP_STATION_SENSOR[2],
+                    True,
+                    note="100 mL 液体瓶开关盖工位必须有瓶",
+                ),
+                _opc_eq(
+                    S08_CAP_STORAGE_SENSOR[1],
+                    False,
+                    note="首次开盖前暂存位为空；开盖后会置 True",
+                ),
+                _manual("parameter", "sample_id", "非零，open/close 使用完全相同的 ID"),
+                _opc_in(
+                    "工站状态[7]", (2, 3, 4, 5, 6), note="仅开启工站状态校验时要求"
+                ),
+            ),
+        ),
+        WorkflowSpec(
+            S09_WORKFLOW,
+            (
+                "szlab_mixer_pipetting_station.prepare_liquid_station",
+                "szlab_mixer_pipetting_station.bind_sample_to_station",
+                "szlab_mixer_pipetting_station.add_liquid",
+                "szlab_mixer_pipetting_station.release_station",
+            ),
+            (
+                _opc_eq("工站状态[8]", 2, note="prepare_liquid_station 只接受状态 2"),
+                _opc_eq("S09工艺完成", 0, note="每个 5/7/8/6 子工艺开始前完成号应清零"),
+                _opc_eq(
+                    S09_TIP_BOX_SENSOR[1], True, note="取放 TIP 工艺要求 TIP 盒在位"
+                ),
+                _opc_eq(S09_STATION_SENSOR[1], True, note="1 号试剂瓶和烧杯工位在位"),
+                _opc_eq(S09_BALANCE_STABLE, True, note="最终烧杯放液后读取稳定天平值"),
+                _opc_readable(S09_BALANCE_READING),
+                _opc_gt(f"S09液体瓶{pump if pump in (1, 2) else 1}剩余液量", 0.0),
+                _manual(
+                    "parameter", "tip_box_index/tip_index", "分别在 1-2、1-96 范围内"
+                ),
+            ),
+        ),
+        WorkflowSpec(
+            "szlab_stack_s05_s06_workflow",
+            (
+                "szlab_poly_plc.get_stack_status",
+                "szlab_mixer_photoshotting.take_photo",
+                "szlab_mixer_pump.run_solvent_addition",
+            ),
+            (
+                _opc_readable(
+                    "传感器状态_上位机[0].NO[0]", note="堆栈传感器组节点必须可读"
+                ),
+                _opc_eq(S05_MATERIAL_SENSOR, True),
+                _opc_eq(S05_DONE, True),
+                _opc_eq(S05_RESULT, 1),
+                _opc_eq(S06_BEAKER_SENSOR, True),
+                *s06_common,
+            ),
+        ),
+        WorkflowSpec(
+            "szlab_mixer_workflow",
+            ("szlab_mixer_pump.run_solvent_addition",),
+            (
+                _opc_eq(S06_BEAKER_SENSOR, True),
+                *s06_common,
+            ),
+        ),
+        WorkflowSpec(
+            "szlab_mixer_pump_production",
+            ("szlab_mixer_pump.run_solvent_addition",),
+            (
+                _opc_eq(S06_BEAKER_SENSOR, True),
+                *s06_common,
+            ),
+        ),
+        WorkflowSpec(
+            "szlab_material_s06_workflow",
+            (
+                MATERIAL_S03_PICK_ACTION,
+                MATERIAL_S06_PLACE_ACTION,
+                MATERIAL_S06_ADD_ACTION,
+                MATERIAL_S06_PICK_ACTION,
+            ),
+            (
+                *_robot_common(),
+                _opc_eq(S03_BEAKER_SENSOR, True, note="S03 1-1 取料源位必须有烧杯"),
+                _opc_eq(
+                    S06_BEAKER_SENSOR, False, note="机器人放料前 S06 加液位必须为空"
+                ),
+                *s06_common,
+                _manual(
+                    "parameter", "skip_level_check", "False 时储液瓶传感器必须在位"
+                ),
+            ),
+        ),
+        WorkflowSpec(
+            S07_MATERIAL_WORKFLOW,
+            (
+                S07_MATERIAL_ROBOT_PICK_ACTION,
+                S07_MATERIAL_PREPARE_ACTION,
+                S07_MATERIAL_ROBOT_PLACE_ACTION,
+                S07_MATERIAL_COMMIT_ACTION,
+                S07_MATERIAL_ROBOT_PICK_ACTION,
+                S07_MATERIAL_ROBOT_PLACE_ACTION,
+                S07_MATERIAL_COMMIT_ACTION,
+                S07_MATERIAL_DOSE_ACTION,
+            ),
+            (
+                *_robot_common(),
+                _opc_eq(S03_BEAKER_SENSOR, True, note="烧杯源 Site 必须有 500 mL 烧杯"),
+                _opc_eq(s071_sensor(1), True, note="示例粉桶源 Site 必须有粉桶"),
+                _opc_eq(s072_sensor(1), False, note="S07/S072 交接位必须为空"),
+                _opc_eq(S07_HOME, True),
+                _opc_eq(S07_ALLOW, True),
+                _opc_eq(S07_DONE, 0, note="每轮开始前完成工艺号应清零"),
+                _opc_readable(S07_BALANCE_READING),
+                _manual(
+                    "config",
+                    "standard_actions_enabled",
+                    "必须启用标准 robot.pick/place",
+                ),
+                _manual(
+                    "runtime",
+                    "workflow_execution_identity",
+                    "OS 必须为每个 robot.pick/place Action 注入有效 WorkflowNodeJob UUID",
+                ),
+            ),
+        ),
+        *(
+            WorkflowSpec(
+                workflow_id,
+                (
+                    "szlab_mixer_robot.pick",
+                    "szlab_mixer_robot.place",
+                    "host_node.transfer_resource",
+                ),
+                standard_transfer_requirements,
+            )
+            for workflow_id in (STANDARD_TRANSFER_WORKFLOW,)
+        ),
+        WorkflowSpec(
+            SINGLE_SAMPLE_WORKFLOW,
+            (
+                "szlab_mixer_robot.pick",
+                "szlab_mixer_robot.place",
+                "host_node.transfer_resource",
+                "szlab_s07_solid_addition.scan_powder_cartridges",
+                "szlab_s07_solid_addition.prepare_powder_cartridge_site",
+                "szlab_s07_solid_addition.dose_powder_with_two_materials",
+                "szlab_mixer_pump.add_solvent_with_materials",
+                "szlab_s08_cap_station.process_liquid_reagent_100ml_cap_with_material",
+                "szlab_mixer_pipetting_station.add_liquid_with_materials",
+                "szlab_mixer_stirrer.stir_beaker",
+                "szlab_mixer_photoshotting.inspect_beaker",
+                "szlab_s08_cap_station.process_sample_vial_250ml_cap_with_material",
+                "szlab_mixer_robot.pick_beaker",
+                "szlab_mixer_robot.pour_beaker_into_vial",
+            ),
+            (
+                *standard_transfer_requirements,
+                _opc_eq(S06_READY, True),
+                _opc_eq(S06_ALLOW, True),
+                _opc_eq(S07_HOME, True),
+                _opc_eq(S07_ALLOW, True),
+                _opc_eq(S08_HOME, True),
+                _opc_eq(S08_ALLOW, True),
+                _opc_eq(S09_ALLOW, True),
+                _opc_eq(S03_BEAKER_SENSOR, True, note="固定示例烧杯源位 L1B1"),
+                _opc_eq(
+                    S03_SAMPLE_VIAL_SENSOR, True, note="固定示例 250 mL 样品瓶源位 L1A1"
+                ),
+                _opc_eq(s071_sensor(1), True, note="固定示例粗粉桶源位 L1C1"),
+                _opc_eq(s071_sensor(2), True, note="固定示例精粉桶源位 L1C2"),
+                _opc_eq(s10_sensor(1), True, note="固定示例试剂瓶源位 R1C1"),
+                _opc_eq(S09_TIP_BOX_SENSOR[1], True, note="移液前 TIP 盒 1 必须在位"),
+                _opc_eq(S09_BALANCE_STABLE, True),
+                _opc_readable(S09_BALANCE_READING),
+                _opc_readable(S07_BALANCE_READING),
+                _manual(
+                    "config",
+                    "s08_s09_site_witnesses",
+                    "S08 双向瓶位、S09 试剂瓶位与 250 mL 负载必须完成现场验收",
+                ),
+            ),
+        ),
+    )
 
 
-@dataclass
-class CycleState:
-    phase: Literal["idle", "executing", "await_reset"] = "idle"
-    due_at: float = 0.0
-    process: int = 0
-    position: int = 0
-    sensor: str = ""
-    duration_seconds: float = 0.0
-    waiting_for_params_clear: bool = False
-    details: Dict[str, Any] = field(default_factory=dict)
+class OpcUaVariableAdapter:
+    """使用直接 NodeId 访问 CSV 已创建变量的生产 adapter。"""
+
+    def __init__(
+        self, url: str, node_prefix: str, username: str = "", password: str = ""
+    ) -> None:
+        self.url = url
+        self.node_prefix = node_prefix
+        self.username = username
+        self.password = password
+        self._client = self._new_client()
+        self._nodes: dict[str, Any] = {}
+        self._browse_index: dict[str, Any] | None = None
+
+    def _new_client(self) -> Any:
+        from opcua import Client
+
+        client = Client(self.url, timeout=10)
+        if self.username:
+            client.set_user(self.username)
+            client.set_password(self.password)
+        return client
+
+    def connect(self) -> None:
+        self._client.connect()
+
+    def disconnect(self) -> None:
+        try:
+            self._client.disconnect()
+        except Exception as exc:
+            print(
+                f"OPC UA 断开连接时忽略临时错误: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    def _reconnect(self) -> None:
+        try:
+            self._client.disconnect()
+        except Exception:
+            pass
+        self._client = self._new_client()
+        self._client.connect()
+        self._nodes.clear()
+        self._browse_index = None
+
+    def _run_io(self, name: str, operation: Any) -> Any:
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            try:
+                return operation()
+            except (TimeoutError, ConnectionError, OSError) as exc:
+                if attempt >= attempts:
+                    raise RuntimeError(
+                        f"{name}: OPC UA 通信失败（已重试 {attempts} 次）"
+                    ) from exc
+                print(
+                    f"{name}: OPC UA {type(exc).__name__}，"
+                    f"正在重连并重试 ({attempt}/{attempts})",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                time.sleep(1.0)
+                self._reconnect()
+        raise AssertionError("unreachable")
+
+    def _node(self, name: str) -> Any:
+        node = self._nodes.get(name)
+        if node is None:
+            node = self._client.get_node(f"{self.node_prefix}{name}")
+            try:
+                node.get_data_type_as_variant_type()
+            except Exception as direct_error:  # noqa: BLE001 - 兼容非标准 NodeId 树
+                node = self._browse_name_index().get(name)
+                if node is None:
+                    raise KeyError(
+                        f"OPC UA 节点不存在: {name} ({self.node_prefix}{name})"
+                    ) from direct_error
+            self._nodes[name] = node
+        return node
+
+    def _browse_name_index(
+        self,
+        *,
+        max_depth: int = 12,
+        max_nodes: int = 20_000,
+    ) -> dict[str, Any]:
+        """扫描一次 BrowseName，兼容 Uni-Lab 测试服务器创建的嵌套节点。"""
+
+        cached = getattr(self, "_browse_index", None)
+        if cached is not None:
+            return cached
+        index: dict[str, Any] = {}
+        stack: list[tuple[Any, int]] = [(self._client.get_objects_node(), 0)]
+        visited = 0
+        while stack and visited < max_nodes:
+            node, depth = stack.pop()
+            visited += 1
+            try:
+                index.setdefault(node.get_browse_name().Name, node)
+                if depth < max_depth:
+                    stack.extend((child, depth + 1) for child in node.get_children())
+            except Exception:
+                continue
+        self._browse_index = index
+        return index
+
+    def read(self, name: str) -> Any:
+        return self._run_io(name, lambda: self._node(name).get_value())
+
+    def write(self, name: str, value: Any) -> None:
+        """按远端变量真实 VariantType 写 Value，不改时间戳或状态码。"""
+
+        self._run_io(name, lambda: self._write_once(name, value))
+
+    def _write_once(self, name: str, value: Any) -> None:
+        from opcua import ua
+
+        node = self._node(name)
+        variant_type = node.get_data_type_as_variant_type()
+        data_value = ua.DataValue()
+        data_value.Value = ua.Variant(value, variant_type)
+        data_value.StatusCode = None
+        data_value.SourceTimestamp = None
+        data_value.ServerTimestamp = None
+        data_value.SourcePicoseconds = None
+        data_value.ServerPicoseconds = None
+
+        write_value = ua.WriteValue()
+        write_value.NodeId = node.nodeid
+        write_value.AttributeId = ua.AttributeIds.Value
+        write_value.Value = data_value
+
+        params = ua.WriteParameters()
+        params.NodesToWrite = [write_value]
+        results = self._client.uaclient.write(params)
+        if results and not results[0].is_good():
+            raise RuntimeError(f"{name}: {results[0]}")
 
 
 @dataclass(frozen=True)
 class HandshakeEvent:
     action: str
     phase: Literal["accepted", "completed", "reset"]
-    details: Dict[str, Any]
+    detail: dict[str, Any]
 
 
-def default_initial_values(
-    *,
-    workflow: str = "all",
-    position: int = 1,
-    pump: int = 1,
-    s06_robot_workflow: bool = False,
-    s09_pipetting_workflow: bool = True,
-    s09_remaining_volume_ml: float = 100.0,
-) -> Dict[str, Any]:
-    """返回仿真器拥有的 PLC 输出初值，不覆盖 PC 侧输入参数。"""
-    components = set(workflow_components(workflow))
-    robot_tasks = workflow_robot_tasks(workflow)
-    s04_positions = workflow_s04_positions(workflow, position)
-    if int(pump) not in (1, 2, 3):
-        raise ValueError("pump 必须是 1、2 或 3")
-    if workflow == "all" and not s09_pipetting_workflow:
-        components.discard("s09")
-    if "s09" in components and float(s09_remaining_volume_ml) <= 0:
-        raise ValueError("S09 初始液体余量必须大于 0 mL")
-
-    values: Dict[str, Any] = {}
-    if "robot" in components:
-        values.update(
-            {
-                ROBOT_HOME: True,
-                ROBOT_WRITE_ALLOWED: True,
-                ROBOT_WRITE_DONE: False,
-                ROBOT_TASK_COMPLETE: 0,
-            }
-        )
-    if robot_tasks.intersection({7, 8}):
-        for s04_position in s04_positions:
-            values[s04_sensor(s04_position)] = False
-    if "s04" in components:
-        for s04_position in s04_positions:
-            values.update(
-                {
-                    s04_allow(s04_position): True,
-                    s04_done(s04_position): False,
-                }
-            )
-    if "photo" in components:
-        values.update({S05_DONE: True, S05_RESULT: 1})
-    if "s06" in components:
-        values.update(
-            {
-                S06_READY: True,
-                S06_ALLOW: True,
-                S06_DONE: False,
-                S06_BEAKER_SENSOR: not bool(s06_robot_workflow),
-            }
-        )
-        for bottle in ((1, 2) if int(pump) == 3 else (int(pump),)):
-            values[S06_STORAGE_BOTTLE_SENSOR[bottle]] = True
-    if robot_tasks.intersection({11, 12}):
-        values[S06_BEAKER_SENSOR] = not bool(s06_robot_workflow)
-    if robot_tasks.intersection({13, 15, 16}):
-        for sensor in S071_SENSOR_BY_SLOT.values():
-            values[sensor] = False
-        values[S072_SENSOR_BY_POSITION[1]] = False
-    if "s07" in components:
-        values.update({S07_HOME: True, S07_ALLOW: True, S07_DONE: 0})
-    if "s08" in components:
-        values.update(
-            {
-                S08_HOME: True,
-                S08_ALLOW: True,
-                S08_DONE: 0,
-                S08_STATION_STATUS: 2,
-                **{s08_cap_cache(1, index): 0 for index in range(30)},
-            }
-        )
-    if "s09" in components:
-        values.update(
-            {
-                S09_STATION_STATUS: 2,
-                S09_ALLOW: True,
-                S09_DONE: 0,
-                **{
-                    s09_remaining_volume(bottle): float(s09_remaining_volume_ml)
-                    for bottle in range(1, 6)
-                },
-            }
-        )
-    return values
+@dataclass
+class _Cycle:
+    phase: Literal["idle", "executing", "await_reset"] = "idle"
+    due_at: float = 0.0
+    process: int = 0
+    position: int = 0
+    sensor: str = ""
+    duration_seconds: float = 0.0
 
 
-class SzlabHandshakeSimulator:
+class WorkflowHandshakeSimulator:
+    """覆盖仓库全部工作流动作的独立 PLC 握手状态机。"""
+
     def __init__(
         self,
-        url: str,
+        adapter: VariableAdapter,
         *,
-        namespace_index: int = 4,
-        node_prefix: str = "上位机通讯|",
-        delay_ms: int = 120,
-        poll_ms: int = 20,
-        delays: Optional[Dict[str, int]] = None,
-        initial_values: Optional[Dict[str, Any]] = None,
-        strict: bool = False,
-        client: Optional[Client] = None,
-        workflow: str = "all",
         position: int = 1,
         pump: int = 1,
+        process_delay: float = 0.5,
+        delays: dict[str, float] | None = None,
+        initial_values: dict[str, Any] | None = None,
         s06_robot_workflow: bool = False,
-        s09_pipetting_workflow: bool = True,
+        s09_pipetting_workflow: bool = False,
         s09_remaining_volume_ml: float = 100.0,
+        s07_balance_reading: float = 1.0,
+        s09_balance_reading: float = 1.0,
+        workflow: str | None = None,
     ) -> None:
-        self.url = url
-        self.namespace_index = int(namespace_index)
-        self.node_prefix = node_prefix
-        self.delay_ms = max(0, int(delay_ms))
-        self.poll_ms = max(5, int(poll_ms))
-        self.delays = {str(key): int(value) for key, value in (delays or {}).items()}
-        self.strict = bool(strict)
-        self.workflow = str(workflow or "all")
+        if int(position) not in range(1, 7):
+            raise ValueError("position 必须在 1-6 范围内")
+        if int(pump) not in (1, 2, 3):
+            raise ValueError("pump 必须是 1、2 或 3")
+        requested_workflow = workflow or "all"
+        selected_workflow = WORKFLOW_ALIASES.get(requested_workflow, requested_workflow)
+        if selected_workflow not in ("all", *WORKFLOW_IDS):
+            raise ValueError(f"不支持的握手工作流: {requested_workflow}")
+        self.adapter = adapter
         self.position = int(position)
         self.pump = int(pump)
-        self.enabled_robot_tasks = workflow_robot_tasks(self.workflow)
+        self.process_delay = max(float(process_delay), 0.0)
+        self.delays = {
+            str(key): max(float(value), 0.0) for key, value in (delays or {}).items()
+        }
+        self.initial_value_overrides = dict(initial_values or {})
+        self.workflow = selected_workflow
         self.s06_robot_workflow = bool(
-            self.enabled_robot_tasks.intersection({11, 12})
-            and (
-                s06_robot_workflow
-                or self.workflow
-                in (
-                    "s06_robot_workflow",
-                    "szlab_robot_liquid_stirring_demo_workflow",
-                )
-            )
+            s06_robot_workflow
+            or selected_workflow
+            in {
+                "s06_robot_workflow",
+                "szlab_material_s06_workflow",
+                "szlab_robot_liquid_stirring_demo_workflow",
+                SINGLE_SAMPLE_WORKFLOW,
+            }
         )
         self.s09_pipetting_workflow = bool(
             s09_pipetting_workflow
-            or self.workflow == "szlab_s09_pipetting_workflow"
+            or selected_workflow in {S09_WORKFLOW, SINGLE_SAMPLE_WORKFLOW}
         )
-        components = set(workflow_components(self.workflow))
-        if self.workflow == "all" and not self.s09_pipetting_workflow:
-            components.discard("s09")
-        self.enabled_components = frozenset(components)
-        self.s04_positions = workflow_s04_positions(self.workflow, self.position)
         self.s09_remaining_volume_ml = float(s09_remaining_volume_ml)
-        defaults = default_initial_values(
-            workflow=self.workflow,
-            position=self.position,
-            pump=self.pump,
-            s06_robot_workflow=self.s06_robot_workflow,
-            s09_pipetting_workflow=self.s09_pipetting_workflow,
-            s09_remaining_volume_ml=self.s09_remaining_volume_ml,
-        )
-        self.initial_values = {**defaults, **dict(initial_values or {})}
-        self.client = client or Client(url, timeout=4)
-        self.nodes: Dict[str, Any] = {}
-        self.enabled_groups: set[str] = set()
-        self.enabled_s04_positions: set[int] = set()
-        self.robot = CycleState()
-        self.s04_cycles = {position: CycleState(position=position) for position in range(1, 7)}
-        self.s06 = CycleState()
-        self.s07 = CycleState()
-        self.s08 = CycleState()
-        self.s09 = CycleState()
+        self.s07_balance_reading = float(s07_balance_reading)
+        self.s09_balance_reading = float(s09_balance_reading)
+        if self.s09_pipetting_workflow and self.s09_remaining_volume_ml <= 0:
+            raise ValueError("S09 初始液体余量必须大于 0 mL")
+        self.robot = _Cycle()
+        self.stirrer = _Cycle(position=self.position)
+        self.pump_cycle = _Cycle(process=self.pump)
+        self.s07_cycle = _Cycle()
+        self.s08_cycle = _Cycle()
+        self.s09_cycle = _Cycle()
         self._s071_loaded_sensor = ""
-        self._s09_startup_stale_process: Optional[int] = None
-        self._s09_startup_guard_captured = False
-        self._warned_inputs: set[tuple[str, int]] = set()
         self.completed_actions = 0
-        self._stop = threading.Event()
-        self._connected = False
 
     @property
-    def required_names(self) -> set[str]:
-        names = set(self.initial_values)
-        components = set(self.enabled_components)
-        if self.workflow == "all" and not self.s09_pipetting_workflow:
-            components.discard("s09")
-        if "robot" in components:
-            names.update(
+    def enabled_components(self) -> frozenset[str]:
+        if self.workflow == "all":
+            return ALL_COMPONENTS
+        return WORKFLOW_COMPONENTS[self.workflow]
+
+    def initialization_values(self) -> dict[str, Any]:
+        components = self.enabled_components
+        values: dict[str, Any] = {}
+        if components & ROBOT_COMPONENTS:
+            values.update(
                 {
-                    ROBOT_HOME,
-                    ROBOT_WRITE_ALLOWED,
-                    ROBOT_WRITE_DONE,
-                    ROBOT_TASK_NUMBER,
-                    ROBOT_TASK_COMPLETE,
+                    ROBOT_HOME: True,
+                    ROBOT_WRITE_ALLOWED: True,
+                    ROBOT_WRITE_DONE: False,
+                    ROBOT_TASK_COMPLETE: 0,
                 }
             )
-            if self.enabled_robot_tasks.intersection({7, 8}):
-                names.add(S04_ROBOT_POSITION)
-                names.update(s04_sensor(item) for item in self.s04_positions)
-            if self.enabled_robot_tasks.intersection({11, 12}):
-                names.add(S06_BEAKER_SENSOR)
-            if 13 in self.enabled_robot_tasks:
-                names.add(S071_ROBOT_POSITION)
-                names.update(S071_SENSOR_BY_SLOT.values())
-            if self.enabled_robot_tasks.intersection({15, 16}):
-                names.add(S072_SENSOR_BY_POSITION[1])
-            if 25 in self.enabled_robot_tasks:
-                names.add(S08_POUR_PRODUCT_TYPE)
-        if "s04" in components:
-            for s04_position in self.s04_positions:
-                names.update(
-                    {
-                        s04_allow(s04_position),
-                        s04_process(s04_position),
-                        s04_params_written(s04_position),
-                        s04_done(s04_position),
-                        s04_duration(s04_position),
-                    }
-                )
-        if "s06" in components:
-            names.update(
+        if "robot_s03" in components:
+            values[S03_BEAKER_SENSOR] = True
+        if self.workflow == SINGLE_SAMPLE_WORKFLOW:
+            values.update(
                 {
-                    S06_READY,
-                    S06_ALLOW,
-                    S06_PROCESS,
-                    S06_PARAMS_WRITTEN,
-                    S06_DONE,
-                    S06_BEAKER_SENSOR,
+                    S03_BEAKER_SENSOR: True,
+                    S03_SAMPLE_VIAL_SENSOR: True,
+                    s071_sensor(1): True,
+                    s071_sensor(2): True,
+                    s10_sensor(1): True,
+                    s11_sensor(1, 1): False,
                 }
             )
-        if "s07" in components:
-            names.update(
+        if "robot_s04" in components:
+            values[s04_sensor(self.position)] = False
+        if "stirrer" in components:
+            values.update(
                 {
-                    S07_HOME,
-                    S07_ALLOW,
-                    S07_PROCESS,
-                    S07_PARAMS_WRITTEN,
-                    S07_DONE,
-                }
-            )
-        if "s08" in components:
-            names.update(
-                {
-                    S08_HOME,
-                    S08_ALLOW,
-                    S08_PROCESS,
-                    S08_PARAMS_WRITTEN,
-                    S08_DONE,
-                    S08_CAP_STORAGE_SLOT,
-                    S08_STATION_STATUS,
-                }
-            )
-        if "s09" in components:
-            names.update(
-                {
-                    S09_PROCESS,
-                    S09_PARAMS_WRITTEN,
-                    S09_DONE,
-                    S09_ALLOW,
-                    S09_STATION_STATUS,
+                    s04_sensor(self.position): not (
+                        "robot_s04" in components
+                        or self.workflow == SINGLE_SAMPLE_WORKFLOW
+                    ),
+                    s04_allow(self.position): True,
+                    s04_status(self.position): 1,
+                    s04_done(self.position): False,
                 }
             )
         if "photo" in components:
-            names.update(
+            values.update(
                 {
-                    S05_DONE,
-                    S05_RESULT,
+                    S05_MATERIAL_SENSOR: self.workflow != SINGLE_SAMPLE_WORKFLOW,
+                    S05_DONE: True,
+                    S05_RESULT: 1,
                 }
             )
-        return names
-
-    def connect(self, timeout: float = 15.0) -> None:
-        started_at = time.monotonic()
-        last_error: Optional[Exception] = None
-        while time.monotonic() - started_at < timeout:
-            try:
-                self.client.connect()
-                self._connected = True
-                break
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
-                time.sleep(0.5)
-        if not self._connected:
-            raise ConnectionError(f"无法连接到 {self.url}: {last_error}")
-
-        self._resolve_nodes()
-        self._prepare_capabilities()
-        log.info(
-            "已连接 %s，工作流=%s，解析节点 %d 个，启用工站：%s",
-            self.url,
-            self.workflow,
-            len(self.nodes),
-            ", ".join(sorted(self.enabled_groups)) or "无",
-        )
-
-    def disconnect(self) -> None:
-        if not self._connected:
-            return
-        try:
-            self.client.disconnect()
-        finally:
-            self._connected = False
-
-    def _resolve_nodes(self) -> None:
-        unresolved = set(self.required_names)
-        for name in list(unresolved):
-            node_id = f"ns={self.namespace_index};s={self.node_prefix}{name}"
-            node = self.client.get_node(node_id)
-            try:
-                node.get_data_type_as_variant_type()
-            except Exception:
-                continue
-            self.nodes[name] = node
-            unresolved.discard(name)
-
-        if unresolved:
-            browse_index = self._browse_name_index()
-            for name in unresolved:
-                node = browse_index.get(name)
-                if node is not None:
-                    self.nodes[name] = node
-
-    def _browse_name_index(self, max_depth: int = 12, max_nodes: int = 15000) -> Dict[str, Any]:
-        index: Dict[str, Any] = {}
-        stack: list[tuple[Any, int]] = [(self.client.get_objects_node(), 0)]
-        visited = 0
-        while stack and visited < max_nodes:
-            node, depth = stack.pop()
-            visited += 1
-            try:
-                browse_name = node.get_browse_name().Name
-                index.setdefault(browse_name, node)
-                if depth < max_depth:
-                    stack.extend((child, depth + 1) for child in node.get_children())
-            except Exception:
-                continue
-        log.info("BrowseName 回退扫描完成：visited=%d indexed=%d", visited, len(index))
-        return index
-
-    def _prepare_capabilities(self) -> None:
-        self.enabled_groups.clear()
-        self.enabled_s04_positions.clear()
-        components = set(self.enabled_components)
-        if self.workflow == "all" and not self.s09_pipetting_workflow:
-            components.discard("s09")
-        groups: Dict[str, Iterable[str]] = {
-            # 产品类型等任务专属参数在接单时单独校验，不能因为旧变量表缺少
-            # 某个新任务参数就禁用整个 Robot 握手组。
-            "robot": (
-                ROBOT_HOME,
-                ROBOT_WRITE_ALLOWED,
-                ROBOT_WRITE_DONE,
-                ROBOT_TASK_NUMBER,
-                ROBOT_TASK_COMPLETE,
-            ),
-            "s06": (S06_ALLOW, S06_PROCESS, S06_PARAMS_WRITTEN, S06_DONE),
-            "s07": (S07_ALLOW, S07_PROCESS, S07_PARAMS_WRITTEN, S07_DONE),
-            "s08": (
-                S08_ALLOW,
-                S08_PROCESS,
-                S08_PARAMS_WRITTEN,
-                S08_DONE,
-                S08_CAP_STORAGE_SLOT,
-            ),
-            "s09": (S09_ALLOW, S09_PROCESS, S09_PARAMS_WRITTEN, S09_DONE),
-            "photo": (S05_DONE, S05_RESULT),
-        }
-        missing_messages: list[str] = []
-        for group, needed in groups.items():
-            if group not in components:
-                continue
-            missing = [name for name in needed if name not in self.nodes]
-            if missing:
-                missing_messages.append(f"{group}: {', '.join(missing)}")
-            else:
-                self.enabled_groups.add(group)
-
-        for position in sorted(self.s04_positions if "s04" in components else ()):
-            needed = (
-                s04_allow(position),
-                s04_process(position),
-                s04_params_written(position),
-                s04_done(position),
+        if "pump" in components:
+            values.update(
+                {
+                    S06_READY: True,
+                    S06_ALLOW: True,
+                    S06_DONE: False,
+                    S06_BEAKER_SENSOR: not self.s06_robot_workflow,
+                }
             )
-            missing = [name for name in needed if name not in self.nodes]
-            if missing:
-                missing_messages.append(f"s04:{position}: {', '.join(missing)}")
-            else:
-                self.enabled_s04_positions.add(position)
-        if self.enabled_s04_positions:
-            self.enabled_groups.add("s04")
+            for index in (1, 2) if self.pump == 3 else (self.pump,):
+                values[S06_STORAGE_BOTTLE_SENSOR[index]] = True
+        if "robot_s07" in components:
+            values.update(
+                {
+                    s071_sensor(1): self.workflow == S07_MATERIAL_WORKFLOW,
+                    s072_sensor(1): False,
+                    s072_sensor(2): False,
+                    S072_ROBOT_PRODUCT: 0,
+                }
+            )
+        if self.workflow == S07_MATERIAL_WORKFLOW:
+            values[ROBOT_TOOL_PAYLOAD_SENSOR] = False
+        if "s07" in components:
+            values.update(
+                {
+                    S07_HOME: True,
+                    S07_ALLOW: True,
+                    S07_DONE: 0,
+                    S07_BALANCE_READING: 0.0,
+                }
+            )
+        if "s08" in components:
+            station_values = {
+                sensor: self.workflow != SINGLE_SAMPLE_WORKFLOW and position == 2
+                for position, sensor in S08_CAP_STATION_SENSOR.items()
+            }
+            values.update(
+                {
+                    S08_HOME: True,
+                    S08_ALLOW: True,
+                    S08_DONE: 0,
+                    S08_STATION_STATUS: 2,
+                    **station_values,
+                    **{sensor: False for sensor in S08_CAP_STORAGE_SENSOR.values()},
+                    **{s08_cap_cache(1, index): 0 for index in range(30)},
+                }
+            )
+        if "s09" in components:
+            station_present = self.workflow != SINGLE_SAMPLE_WORKFLOW
+            values.update(
+                {
+                    S09_STATION_STATUS: 2,
+                    S09_ALLOW: True,
+                    S09_DONE: 0,
+                    S09_TIP_BOX_SENSOR[1]: True,
+                    S09_TIP_BOX_SENSOR[2]: True,
+                    **{
+                        sensor: station_present
+                        for sensor in S09_STATION_SENSOR.values()
+                    },
+                    S09_BALANCE_STABLE: True,
+                    S09_BALANCE_READING: self.s09_balance_reading,
+                    **{
+                        s09_remaining_volume(index): self.s09_remaining_volume_ml
+                        for index in range(1, 6)
+                    },
+                }
+            )
+        return {**values, **self.initial_value_overrides}
 
-        if self.strict:
-            missing_all = sorted(self.required_names.difference(self.nodes))
-            if missing_all:
-                raise RuntimeError("SZLab 握手节点不完整：" + ", ".join(missing_all))
-        elif missing_messages:
-            log.warning("部分握手因 CSV/Server 缺少节点而跳过：%s", "; ".join(missing_messages))
+    def cleanup_values(self) -> dict[str, Any]:
+        components = self.enabled_components
+        values: dict[str, Any] = {}
+        if components & ROBOT_COMPONENTS:
+            values.update(
+                {
+                    ROBOT_HOME: False,
+                    ROBOT_WRITE_ALLOWED: False,
+                    ROBOT_TASK_COMPLETE: 0,
+                }
+            )
+        if "robot_s03" in components:
+            values[S03_BEAKER_SENSOR] = False
+        if "robot_s04" in components:
+            values[s04_sensor(self.position)] = False
+        if "stirrer" in components:
+            values.update(
+                {
+                    s04_sensor(self.position): False,
+                    s04_allow(self.position): False,
+                    s04_status(self.position): 0,
+                    s04_done(self.position): False,
+                }
+            )
+        if "photo" in components:
+            values.update(
+                {
+                    S05_MATERIAL_SENSOR: False,
+                    S05_DONE: False,
+                    S05_RESULT: 0,
+                }
+            )
+        if "pump" in components:
+            values.update(
+                {
+                    S06_READY: False,
+                    S06_ALLOW: False,
+                    S06_DONE: False,
+                    S06_BEAKER_SENSOR: False,
+                }
+            )
+            for index in (1, 2) if self.pump == 3 else (self.pump,):
+                values[S06_STORAGE_BOTTLE_SENSOR[index]] = False
+        if "robot_s07" in components:
+            values.update(
+                {
+                    s071_sensor(1): False,
+                    s072_sensor(1): False,
+                    s072_sensor(2): False,
+                    S072_ROBOT_PRODUCT: 0,
+                }
+            )
+        if self.workflow == S07_MATERIAL_WORKFLOW:
+            values[ROBOT_TOOL_PAYLOAD_SENSOR] = False
+        if "s07" in components:
+            values.update(
+                {
+                    S07_HOME: False,
+                    S07_ALLOW: False,
+                    S07_DONE: 0,
+                    S07_BALANCE_READING: 0.0,
+                }
+            )
+        if "s08" in components:
+            values.update(
+                {
+                    S08_HOME: False,
+                    S08_ALLOW: False,
+                    S08_DONE: 0,
+                    S08_STATION_STATUS: 0,
+                    **{sensor: False for sensor in S08_CAP_STATION_SENSOR.values()},
+                    **{sensor: False for sensor in S08_CAP_STORAGE_SENSOR.values()},
+                    **{s08_cap_cache(1, index): 0 for index in range(30)},
+                }
+            )
+        if "s09" in components:
+            values.update(
+                {
+                    S09_STATION_STATUS: 0,
+                    S09_ALLOW: False,
+                    S09_DONE: 0,
+                    **{sensor: False for sensor in S09_TIP_BOX_SENSOR.values()},
+                    **{sensor: False for sensor in S09_STATION_SENSOR.values()},
+                    S09_BALANCE_STABLE: False,
+                    S09_BALANCE_READING: 0.0,
+                    **{s09_remaining_volume(index): 0.0 for index in range(1, 6)},
+                }
+            )
+        for name, initial_value in self.initial_value_overrides.items():
+            values.setdefault(name, False if isinstance(initial_value, bool) else 0)
+        return values
 
     def initialize(self) -> None:
-        # 先快照 PC 输入，再写仿真器输出。否则远程初始化节点较多时，
-        # 初始化期间到达的新命令可能被误判为启动残留值。
-        self._reset_internal_state()
-        self._capture_s09_startup_guard()
-        written = 0
-        for name, value in self.initial_values.items():
-            if name in self.nodes:
-                self._write(name, value)
-                written += 1
-        log.info("PLC 侧握手初始状态已写入：%d 个节点", written)
+        for name, value in self.initialization_values().items():
+            self.adapter.write(name, value)
 
     def cleanup(self) -> None:
-        """安全释放本仿真器拥有的输出，不改写 PC 侧任务号和工艺参数。"""
-        cleaned = 0
-        for name, value in self._cleanup_values().items():
-            if name in self.nodes:
-                self._write(name, value)
-                cleaned += 1
-        self._reset_internal_state()
-        log.info("PLC 侧握手输出已清理：%d 个节点", cleaned)
+        for name, value in self.cleanup_values().items():
+            self.adapter.write(name, value)
 
-    def _cleanup_values(self) -> Dict[str, Any]:
-        owned_values = default_initial_values(
-            workflow=self.workflow,
-            position=self.position,
-            pump=self.pump,
-            s06_robot_workflow=self.s06_robot_workflow,
-            s09_pipetting_workflow=self.s09_pipetting_workflow,
-            s09_remaining_volume_ml=self.s09_remaining_volume_ml,
-        )
-        # 启动时将 write_done 置为基线 False，但退出时它属于 PC 输入，不能覆盖。
-        owned_values.pop(ROBOT_WRITE_DONE, None)
-        return {
-            name: (False if isinstance(value, bool) else 0)
-            for name, value in owned_values.items()
-        }
-
-    def _reset_internal_state(self) -> None:
-        self.robot = CycleState()
-        self.s04_cycles = {position: CycleState(position=position) for position in range(1, 7)}
-        self.s06 = CycleState()
-        self.s07 = CycleState()
-        self.s08 = CycleState()
-        self.s09 = CycleState()
-        self._s071_loaded_sensor = ""
-        self._s09_startup_stale_process = None
-        self._s09_startup_guard_captured = False
-        self._warned_inputs.clear()
-
-    def _capture_s09_startup_guard(self) -> None:
-        """快照 S09 启动前的 PC 输入，避免把上次中断的工艺当成新命令。"""
-        self._s09_startup_guard_captured = True
-        self._s09_startup_stale_process = None
-        if "s09" not in self.enabled_groups:
-            return
-        if S09_PROCESS not in self.nodes or S09_PARAMS_WRITTEN not in self.nodes:
-            return
-        process = int(self._read(S09_PROCESS) or 0)
-        params_written = bool(self._read(S09_PARAMS_WRITTEN))
-        if process in S09_PROCESS_LABELS and not params_written:
-            self._s09_startup_stale_process = process
-            log.warning(
-                "S09 启动时检测到无参数脉冲的残留工艺 %d (%s)；"
-                "等待工艺号变化或新的参数完成脉冲",
-                process,
-                S09_PROCESS_LABELS[process],
-            )
-
-    def run_forever(self, initialize: bool = True) -> None:
-        if initialize:
-            self.initialize()
-        elif not self._s09_startup_guard_captured:
-            self._capture_s09_startup_guard()
-        log.info("SZLab 握手仿真已启动，poll=%dms", self.poll_ms)
-        while not self._stop.wait(self.poll_ms / 1000.0):
+    def check_supported_prerequisites(self) -> list[tuple[str, bool, Any, Any]]:
+        result: list[tuple[str, bool, Any, Any]] = []
+        for name, expected in self.initialization_values().items():
             try:
-                self.tick()
+                actual = self.adapter.read(name)
+                result.append((name, actual == expected, expected, actual))
             except Exception as exc:  # noqa: BLE001
-                log.exception("握手轮询异常：%s", exc)
+                result.append((name, False, expected, f"{type(exc).__name__}: {exc}"))
+        return result
 
-    def stop(self) -> None:
-        self._stop.set()
-
-    def tick(self, now: Optional[float] = None) -> list[HandshakeEvent]:
+    def step(self, now: float | None = None) -> list[HandshakeEvent]:
         now = time.monotonic() if now is None else float(now)
+        components = self.enabled_components
         events: list[HandshakeEvent] = []
-        if "robot" in self.enabled_groups:
-            events.extend(self._tick_robot(now))
-        for position in sorted(self.enabled_s04_positions):
-            events.extend(self._tick_s04(position, now))
-        if "s06" in self.enabled_groups:
-            events.extend(self._tick_boolean_station("s06", self.s06, now))
-        if "s07" in self.enabled_groups:
-            events.extend(self._tick_s07(now))
-        if "s08" in self.enabled_groups:
-            events.extend(self._tick_s08(now))
-        if "s09" in self.enabled_groups:
-            events.extend(self._tick_s09(now))
+        if components & ROBOT_COMPONENTS:
+            events.extend(self._step_robot(now))
+        if "stirrer" in components:
+            events.extend(self._step_stirrer(now))
+        if "pump" in components:
+            events.extend(self._step_pump(now))
+        if "s07" in components:
+            events.extend(self._step_s07(now))
+        if "s08" in components:
+            events.extend(self._step_s08(now))
+        if "s09" in components:
+            events.extend(self._step_s09(now))
         self.completed_actions += sum(event.phase == "completed" for event in events)
-        for event in events:
-            log.info("握手 %s %s：%s", event.action, event.phase, event.details)
         return events
 
-    def _tick_robot(self, now: float) -> list[HandshakeEvent]:
+    def all_cycles_idle(self) -> bool:
+        """所有已启用握手均已被 Edge 消费并完成复位。"""
+
+        components = self.enabled_components
+        cycles = []
+        if components & ROBOT_COMPONENTS:
+            cycles.append(self.robot)
+        if "stirrer" in components:
+            cycles.append(self.stirrer)
+        if "pump" in components:
+            cycles.append(self.pump_cycle)
+        if "s07" in components:
+            cycles.append(self.s07_cycle)
+        if "s08" in components:
+            cycles.append(self.s08_cycle)
+        if "s09" in components:
+            cycles.append(self.s09_cycle)
+        return all(cycle.phase == "idle" for cycle in cycles)
+
+    def _robot_task_supported(self, task: int) -> bool:
+        return task in ROBOT_ACTION_BY_TASK or (
+            "robot_standard" in self.enabled_components
+            and task in STANDARD_ROBOT_TASK_KIND
+        )
+
+    def _robot_task_position_and_sensor(self, task: int) -> tuple[int, str]:
+        if task == 1:
+            return 0, ""
+        if task in (3, 4):
+            position = int(self.adapter.read(S02_ROBOT_POSITION) or 0)
+            return position, s02_sensor(position)
+        if task in (5, 6):
+            if task == 6 and self.workflow not in {
+                STANDARD_TRANSFER_WORKFLOW,
+                SINGLE_SAMPLE_WORKFLOW,
+            }:
+                return 1, S03_BEAKER_SENSOR
+            product_type = int(self.adapter.read(S03_ROBOT_PRODUCT) or 0)
+            position = int(self.adapter.read(S03_ROBOT_POSITION) or 0)
+            return position, s03_sensor(product_type, position)
+        if task in (7, 8):
+            position = int(self.adapter.read(S04_ROBOT_POSITION) or 0)
+            if position != self.position:
+                raise RuntimeError(
+                    f"机器人 S04 位置不匹配：脚本监听 {self.position}，收到 {position}"
+                )
+            return position, s04_sensor(position)
+        if task in (9, 10):
+            return 1, S05_MATERIAL_SENSOR
+        if task in (11, 12):
+            return 1, S06_BEAKER_SENSOR
+        if task in (13, 14):
+            position = int(self.adapter.read(S071_ROBOT_POSITION) or 0)
+            return position, s071_sensor(position)
+        if task in (15, 16):
+            position = int(self.adapter.read(S072_ROBOT_PRODUCT) or 0)
+            return position, s072_sensor(position)
+        if task in (17, 18):
+            position = int(self.adapter.read(S08_ROBOT_POSITION) or 0)
+            try:
+                return position, S08_CAP_STATION_SENSOR[position]
+            except KeyError as exc:
+                raise ValueError("S08 取放料位置必须在 1-2 范围内") from exc
+        if task in (19, 20):
+            product_type = int(self.adapter.read(S09_TRANSFER_PRODUCT) or 0)
+            position = int(self.adapter.read(S09_TRANSFER_POSITION) or 0)
+            return position, s09_transfer_sensor(product_type, position)
+        if task in (21, 22):
+            position = int(self.adapter.read(S10_ROBOT_POSITION) or 0)
+            return position, s10_sensor(position)
+        if task in (23, 24):
+            product_type = int(self.adapter.read(S11_ROBOT_PRODUCT) or 0)
+            position = int(self.adapter.read(S11_ROBOT_POSITION) or 0)
+            return position, s11_sensor(product_type, position)
+        if task == 25:
+            return int(self.adapter.read(S08_POUR_PRODUCT) or 0), ""
+        raise ValueError(f"不支持的机器人任务号: {task}")
+
+    def _step_robot(self, now: float) -> list[HandshakeEvent]:
         cycle = self.robot
         events: list[HandshakeEvent] = []
         if cycle.phase == "idle":
-            write_done = bool(self._read(ROBOT_WRITE_DONE))
-            task = int(self._read(ROBOT_TASK_NUMBER) or 0)
-            if write_done and task in ROBOT_ACTION_BY_TASK:
-                target = self._robot_target(task)
-                if target is None:
-                    self._warn_unsupported_input("robot", task)
-                    return events
-                position, sensor, details = target
-                self._write(ROBOT_WRITE_ALLOWED, False)
-                self._write(ROBOT_HOME, False)
-                self._write(ROBOT_TASK_COMPLETE, 0)
+            write_done = bool(self.adapter.read(ROBOT_WRITE_DONE))
+            task = int(self.adapter.read(ROBOT_TASK_NUMBER) or 0)
+            if write_done and self._robot_task_supported(task):
+                position, sensor = self._robot_task_position_and_sensor(task)
+                self.adapter.write(ROBOT_WRITE_ALLOWED, False)
+                self.adapter.write(ROBOT_HOME, False)
+                self.adapter.write(ROBOT_TASK_COMPLETE, 0)
                 cycle.phase = "executing"
                 cycle.process = task
                 cycle.position = position
                 cycle.sensor = sensor
-                cycle.details = details
-                cycle.due_at = now + self._delay_seconds("robot")
+                cycle.duration_seconds = self._delay_seconds("robot")
+                cycle.due_at = now + cycle.duration_seconds
                 events.append(
                     HandshakeEvent(
-                        ROBOT_ACTION_BY_TASK[task],
+                        self._robot_action(task),
                         "accepted",
                         {
                             "task_number": task,
                             **({"position": position} if position else {}),
                             **({"sensor": sensor} if sensor else {}),
-                            **details,
                         },
                     )
                 )
         elif cycle.phase == "executing" and now >= cycle.due_at:
-            occupied = cycle.process in (7, 11, 13, 15)
+            occupied = STANDARD_ROBOT_TASK_KIND.get(cycle.process) == "place"
             if cycle.sensor:
-                self._write(cycle.sensor, occupied)
+                self.adapter.write(cycle.sensor, occupied)
+            if self.workflow == S07_MATERIAL_WORKFLOW and cycle.process in (6, 14, 15):
+                self.adapter.write(
+                    ROBOT_TOOL_PAYLOAD_SENSOR,
+                    cycle.process in (6, 14),
+                )
             rearmed_sensor = ""
             if cycle.process == 13:
                 self._s071_loaded_sensor = cycle.sensor
             elif cycle.process == 16 and self._s071_loaded_sensor:
+                # s07_robot_workflow 的最后一步取走 S072 产品后，模拟 S071
+                # 粉罐已被工站消费/移走，从而无需重启即可开始下一轮放粉罐。
                 rearmed_sensor = self._s071_loaded_sensor
-                self._write(rearmed_sensor, False)
+                self.adapter.write(rearmed_sensor, False)
                 self._s071_loaded_sensor = ""
-            self._write(ROBOT_HOME, True)
-            self._write(ROBOT_TASK_COMPLETE, cycle.process)
+            self.adapter.write(ROBOT_HOME, True)
+            self.adapter.write(ROBOT_TASK_COMPLETE, cycle.process)
             cycle.phase = "await_reset"
             events.append(
                 HandshakeEvent(
-                    ROBOT_ACTION_BY_TASK[cycle.process],
+                    self._robot_action(cycle.process),
                     "completed",
                     {
                         "task_number": cycle.process,
                         "occupied": occupied,
                         **({"position": cycle.position} if cycle.position else {}),
                         **({"sensor": cycle.sensor} if cycle.sensor else {}),
-                        **({"rearmed_sensor": rearmed_sensor} if rearmed_sensor else {}),
-                        **cycle.details,
+                        **(
+                            {"rearmed_sensor": rearmed_sensor} if rearmed_sensor else {}
+                        ),
                     },
                 )
             )
         elif cycle.phase == "await_reset":
-            write_done = bool(self._read(ROBOT_WRITE_DONE))
-            observed_task = int(self._read(ROBOT_TASK_NUMBER) or 0)
+            write_done = bool(self.adapter.read(ROBOT_WRITE_DONE))
+            task = int(self.adapter.read(ROBOT_TASK_NUMBER) or 0)
+            # Robot_任务写入完成=False 表示 Edge 已经消费完成码。任务号在
+            # SKIP_RESET_AFTER_RUN 等配置下可能保留为上一任务，不能用它
+            # 阻塞状态机重装填；下一轮仍以 write_done 的新上升沿触发。
             if not write_done:
-                self._write(ROBOT_TASK_COMPLETE, 0)
-                self._write(ROBOT_WRITE_ALLOWED, True)
-                self._write(ROBOT_HOME, True)
+                self.adapter.write(ROBOT_TASK_COMPLETE, 0)
+                self.adapter.write(ROBOT_WRITE_ALLOWED, True)
+                self.adapter.write(ROBOT_HOME, True)
                 events.append(
                     HandshakeEvent(
-                        ROBOT_ACTION_BY_TASK[cycle.process],
+                        self._robot_action(cycle.process),
                         "reset",
                         {
                             "task_number": cycle.process,
-                            "observed_task_number": observed_task,
-                            **cycle.details,
+                            "observed_task_number": task,
                         },
                     )
                 )
-                self.robot = CycleState()
+                cycle.phase = "idle"
+                cycle.process = 0
+                cycle.position = 0
+                cycle.sensor = ""
         return events
 
-    def _robot_target(self, task: int) -> Optional[tuple[int, str, Dict[str, Any]]]:
-        if task not in self.enabled_robot_tasks:
-            return None
-        position = 0
-        sensor = ""
-        details: Dict[str, Any] = {}
-        if task in (7, 8):
-            if S04_ROBOT_POSITION not in self.nodes:
-                return None
-            position = int(self._read(S04_ROBOT_POSITION) or 0)
-            if position not in self.s04_positions:
-                return None
-            sensor = s04_sensor(position)
-        elif task in (11, 12):
-            sensor = S06_BEAKER_SENSOR
-        elif task == 13:
-            if S071_ROBOT_POSITION not in self.nodes:
-                return None
-            position = int(self._read(S071_ROBOT_POSITION) or 0)
-            if position not in S071_SENSOR_BY_SLOT:
-                return None
-            sensor = S071_SENSOR_BY_SLOT[position]
-        elif task in (15, 16):
-            position = 1
-            sensor = S072_SENSOR_BY_POSITION[position]
-        elif task == 25:
-            if S08_POUR_PRODUCT_TYPE not in self.nodes:
-                return None
-            product_type = int(self._read(S08_POUR_PRODUCT_TYPE) or 0)
-            if product_type not in (1, 2):
-                self._warn_unsupported_input("S08倒料产品选择", product_type)
-                return None
-            details["product_type"] = product_type
-        if sensor and sensor not in self.nodes:
-            return None
-        return position, sensor, details
+    def _robot_action(self, task: int) -> str:
+        if self.workflow == "szlab_material_s06_workflow":
+            return MATERIAL_S06_ACTION_BY_TASK[task]
+        if self.workflow == S07_MATERIAL_WORKFLOW:
+            return MATERIAL_S07_ACTION_BY_TASK[task]
+        if self.workflow == "all" and task in ROBOT_ACTION_BY_TASK:
+            return ROBOT_ACTION_BY_TASK[task]
+        if "robot_standard" in self.enabled_components:
+            if self.workflow == SINGLE_SAMPLE_WORKFLOW and task == 10:
+                return SINGLE_SAMPLE_ROBOT_PICK_ACTION
+            if self.workflow == SINGLE_SAMPLE_WORKFLOW and task == 25:
+                return SINGLE_SAMPLE_ROBOT_POUR_ACTION
+            kind = STANDARD_ROBOT_TASK_KIND[task]
+            if kind in {"pick", "place"}:
+                return f"szlab_mixer_robot.{kind}"
+            return "szlab_mixer_robot.submit_pour_from_s08"
+        return ROBOT_ACTION_BY_TASK[task]
 
-    def _tick_s04(self, position: int, now: float) -> list[HandshakeEvent]:
-        cycle = self.s04_cycles[position]
+    def _step_stirrer(self, now: float) -> list[HandshakeEvent]:
+        cycle = self.stirrer
         events: list[HandshakeEvent] = []
-        params_written = bool(self._read(s04_params_written(position)))
-        process = int(self._read(s04_process(position)) or 0)
-        if cycle.phase == "idle" and params_written and process in (1, 2, 3):
-            self._write(s04_allow(position), False)
-            self._write(s04_done(position), False)
-            cycle.phase = "executing"
-            cycle.process = process
-            cycle.duration_seconds = self._s04_duration_seconds(position)
-            cycle.due_at = now + cycle.duration_seconds
-            events.append(
-                HandshakeEvent(
-                    SUPPORTED_ACTIONS[1],
-                    "accepted",
-                    {
-                        "process": process,
-                        "position": position,
-                        "duration_seconds": cycle.duration_seconds,
-                    },
+        params_name = s04_params_written(self.position)
+        process_name = s04_process(self.position)
+        if cycle.phase == "idle":
+            params_written = bool(self.adapter.read(params_name))
+            process = int(self.adapter.read(process_name) or 0)
+            if params_written and process in (1, 2, 3):
+                self.adapter.write(s04_allow(self.position), False)
+                self.adapter.write(s04_status(self.position), 2)
+                self.adapter.write(s04_done(self.position), False)
+                cycle.phase = "executing"
+                cycle.process = process
+                cycle.duration_seconds = self._stirrer_duration_seconds()
+                cycle.due_at = now + cycle.duration_seconds
+                events.append(
+                    HandshakeEvent(
+                        self._stirrer_action(),
+                        "accepted",
+                        {
+                            "process": process,
+                            "position": self.position,
+                            "duration_seconds": cycle.duration_seconds,
+                        },
+                    )
                 )
-            )
         elif cycle.phase == "executing" and now >= cycle.due_at:
-            self._write(s04_done(position), True)
+            self.adapter.write(s04_done(self.position), True)
+            self.adapter.write(s04_status(self.position), 1)
             cycle.phase = "await_reset"
             events.append(
                 HandshakeEvent(
-                    SUPPORTED_ACTIONS[1],
+                    self._stirrer_action(),
                     "completed",
                     {
                         "process": cycle.process,
-                        "position": position,
+                        "position": self.position,
                         "duration_seconds": cycle.duration_seconds,
                     },
                 )
             )
-        elif cycle.phase == "await_reset" and not params_written and process == 0:
-            self._write(s04_done(position), False)
-            self._write(s04_allow(position), True)
-            events.append(
-                HandshakeEvent(
-                    SUPPORTED_ACTIONS[1],
-                    "reset",
-                    {"process": cycle.process, "position": position},
+        elif cycle.phase == "await_reset":
+            params_written = bool(self.adapter.read(params_name))
+            process = int(self.adapter.read(process_name) or 0)
+            if not params_written and process == 0:
+                self.adapter.write(s04_done(self.position), False)
+                self.adapter.write(s04_allow(self.position), True)
+                self.adapter.write(s04_status(self.position), 1)
+                events.append(
+                    HandshakeEvent(
+                        self._stirrer_action(),
+                        "reset",
+                        {"process": cycle.process, "position": self.position},
+                    )
                 )
-            )
-            self.s04_cycles[position] = CycleState(position=position)
+                cycle.phase = "idle"
+                cycle.process = 0
         return events
 
-    def _tick_boolean_station(
-        self,
-        group: str,
-        cycle: CycleState,
-        now: float,
-    ) -> list[HandshakeEvent]:
-        if group != "s06":
-            raise ValueError(f"未知布尔握手工站：{group}")
+    def _stirrer_action(self) -> str:
+        if self.workflow == SINGLE_SAMPLE_WORKFLOW:
+            return SINGLE_SAMPLE_STIR_ACTION
+        return S04_STIR_ACTION
+
+    def _step_pump(self, now: float) -> list[HandshakeEvent]:
+        cycle = self.pump_cycle
         events: list[HandshakeEvent] = []
-        params_written = bool(self._read(S06_PARAMS_WRITTEN))
-        process = int(self._read(S06_PROCESS) or 0)
-        if cycle.phase == "idle" and params_written and process in (1, 2, 3):
-            self._write(S06_ALLOW, False)
-            self._write(S06_DONE, False)
-            cycle.phase = "executing"
-            cycle.process = process
-            cycle.due_at = now + self._delay_seconds("s06")
-            events.append(
-                HandshakeEvent(
-                    SUPPORTED_ACTIONS[4],
-                    "accepted",
-                    {"process": process},
+        if cycle.phase == "idle":
+            params_written = bool(self.adapter.read(S06_PARAMS_WRITTEN))
+            process = int(self.adapter.read(S06_PROCESS) or 0)
+            if params_written and process in (1, 2, 3):
+                self.adapter.write(S06_ALLOW, False)
+                self.adapter.write(S06_DONE, False)
+                cycle.phase = "executing"
+                cycle.process = process
+                cycle.duration_seconds = self._delay_seconds("pump")
+                cycle.due_at = now + cycle.duration_seconds
+                events.append(
+                    HandshakeEvent(
+                        self._pump_action(),
+                        "accepted",
+                        {"process": process},
+                    )
                 )
-            )
         elif cycle.phase == "executing" and now >= cycle.due_at:
-            self._write(S06_DONE, True)
+            self.adapter.write(S06_DONE, True)
             cycle.phase = "await_reset"
             events.append(
                 HandshakeEvent(
-                    SUPPORTED_ACTIONS[4],
+                    self._pump_action(),
                     "completed",
                     {"process": cycle.process},
                 )
             )
-        elif cycle.phase == "await_reset" and not params_written:
-            self._write(S06_DONE, False)
-            self._write(S06_ALLOW, True)
-            events.append(
-                HandshakeEvent(
-                    SUPPORTED_ACTIONS[4],
-                    "reset",
-                    {"process": cycle.process, "observed_process": process},
-                )
-            )
-            self.s06 = CycleState()
-        return events
-
-    def _tick_s07(self, now: float) -> list[HandshakeEvent]:
-        cycle = self.s07
-        events: list[HandshakeEvent] = []
-        process = int(self._read(S07_PROCESS) or 0)
-        params_written = bool(self._read(S07_PARAMS_WRITTEN))
-        if cycle.phase == "idle" and params_written and process in S07_PROCESS_LABELS:
-            self._write(S07_ALLOW, False)
-            self._write(S07_DONE, 0)
-            cycle.phase = "executing"
-            cycle.process = process
-            cycle.due_at = now + self._delay_seconds("s07")
-            events.append(
-                HandshakeEvent(
-                    S07_ACTION_BY_PROCESS[process],
-                    "accepted",
-                    {"process": process, "process_label": S07_PROCESS_LABELS[process]},
-                )
-            )
-        elif cycle.phase == "executing" and now >= cycle.due_at:
-            self._write(S07_DONE, cycle.process)
-            cycle.phase = "await_reset"
-            events.append(
-                HandshakeEvent(
-                    S07_ACTION_BY_PROCESS[cycle.process],
-                    "completed",
-                    {
-                        "process": cycle.process,
-                        "process_label": S07_PROCESS_LABELS[cycle.process],
-                    },
-                )
-            )
-        elif cycle.phase == "await_reset" and not params_written and process == 0:
-            self._write(S07_DONE, 0)
-            self._write(S07_ALLOW, True)
-            events.append(
-                HandshakeEvent(
-                    S07_ACTION_BY_PROCESS[cycle.process],
-                    "reset",
-                    {
-                        "process": cycle.process,
-                        "process_label": S07_PROCESS_LABELS[cycle.process],
-                    },
-                )
-            )
-            self.s07 = CycleState()
-        return events
-
-    def _tick_s08(self, now: float) -> list[HandshakeEvent]:
-        cycle = self.s08
-        events: list[HandshakeEvent] = []
-        process = int(self._read(S08_PROCESS) or 0)
-        params_written = bool(self._read(S08_PARAMS_WRITTEN))
-        cap_storage_slot = int(self._read(S08_CAP_STORAGE_SLOT) or 0)
-        if cycle.phase == "idle" and params_written and process in S08_PROCESS_LABELS:
-            self._write(S08_ALLOW, False)
-            self._write(S08_DONE, 0)
-            cycle.phase = "executing"
-            cycle.process = process
-            cycle.position = cap_storage_slot
-            cycle.due_at = now + self._delay_seconds("s08")
-            events.append(
-                HandshakeEvent(
-                    SUPPORTED_ACTIONS[17],
-                    "accepted",
-                    {
-                        "process": process,
-                        "process_label": S08_PROCESS_LABELS[process],
-                        "cap_storage_slot": cap_storage_slot,
-                    },
-                )
-            )
-        elif cycle.phase == "executing" and now >= cycle.due_at:
-            self._write(S08_DONE, cycle.process)
-            cycle.phase = "await_reset"
-            events.append(
-                HandshakeEvent(
-                    SUPPORTED_ACTIONS[17],
-                    "completed",
-                    {
-                        "process": cycle.process,
-                        "process_label": S08_PROCESS_LABELS[cycle.process],
-                        "cap_storage_slot": cycle.position,
-                    },
-                )
-            )
-        elif (
-            cycle.phase == "await_reset"
-            and not params_written
-            and process == 0
-            and cap_storage_slot == 0
-        ):
-            self._write(S08_DONE, 0)
-            self._write(S08_ALLOW, True)
-            events.append(
-                HandshakeEvent(
-                    SUPPORTED_ACTIONS[17],
-                    "reset",
-                    {
-                        "process": cycle.process,
-                        "process_label": S08_PROCESS_LABELS[cycle.process],
-                        "cap_storage_slot": cycle.position,
-                    },
-                )
-            )
-            self.s08 = CycleState()
-        return events
-
-    def _tick_s09(self, now: float) -> list[HandshakeEvent]:
-        cycle = self.s09
-        events: list[HandshakeEvent] = []
-        process = int(self._read(S09_PROCESS) or 0)
-        params_written = bool(self._read(S09_PARAMS_WRITTEN))
-        if not self._s09_startup_guard_captured:
-            self._capture_s09_startup_guard()
-        stale_process = self._s09_startup_stale_process
-        if stale_process is not None:
-            if not params_written and process == stale_process:
-                return events
-            self._s09_startup_stale_process = None
-            log.info(
-                "S09 启动残留保护已解除：启动工艺=%d，当前工艺=%d，参数完成=%s",
-                stale_process,
-                process,
-                params_written,
-            )
-        if cycle.phase == "idle" and process in S09_PROCESS_LABELS:
-            self._write(S09_ALLOW, False)
-            self._write(S09_DONE, 0)
-            cycle.phase = "executing"
-            cycle.process = process
-            cycle.duration_seconds = self._delay_seconds("s09")
-            cycle.waiting_for_params_clear = params_written
-            cycle.due_at = (
-                0.0
-                if cycle.waiting_for_params_clear
-                else now + cycle.duration_seconds
-            )
-            events.append(
-                HandshakeEvent(
-                    SUPPORTED_ACTIONS[9],
-                    "accepted",
-                    {
-                        "process": process,
-                        "process_label": S09_PROCESS_LABELS[process],
-                        "params_written": params_written,
-                        "duration_seconds": cycle.duration_seconds,
-                    },
-                )
-            )
-        elif cycle.phase == "executing" and cycle.waiting_for_params_clear:
+        elif cycle.phase == "await_reset":
+            params_written = bool(self.adapter.read(S06_PARAMS_WRITTEN))
+            process = int(self.adapter.read(S06_PROCESS) or 0)
+            # 参数写入标志的下降沿是 PC 已消费完成信号的权威确认。工艺号
+            # 允许保留旧值；下一轮仍需 params_written 再次变为 True。
             if not params_written:
-                # Edge 的参数脉冲默认持续约 0.1 秒。从脉冲回落后再计时，
-                # 确保 Edge 已经进入完成信号等待，不会把新完成号误认为旧周期。
-                cycle.waiting_for_params_clear = False
+                self.adapter.write(S06_DONE, False)
+                self.adapter.write(S06_ALLOW, True)
+                events.append(
+                    HandshakeEvent(
+                        self._pump_action(),
+                        "reset",
+                        {
+                            "process": cycle.process,
+                            "observed_process": process,
+                        },
+                    )
+                )
+                cycle.phase = "idle"
+                cycle.process = 0
+        return events
+
+    def _pump_action(self) -> str:
+        if self.workflow == "szlab_material_s06_workflow":
+            return MATERIAL_S06_ADD_ACTION
+        if self.workflow == SINGLE_SAMPLE_WORKFLOW:
+            return SINGLE_SAMPLE_PUMP_ACTION
+        return S06_PUMP_ACTION
+
+    def _step_s07(self, now: float) -> list[HandshakeEvent]:
+        """模拟 S07 扫码、转位和注粉三个工艺的可重复握手。"""
+
+        cycle = self.s07_cycle
+        events: list[HandshakeEvent] = []
+        process = int(self.adapter.read(S07_PROCESS) or 0)
+        params_written = bool(self.adapter.read(S07_PARAMS_WRITTEN))
+
+        if cycle.phase == "idle":
+            if params_written and process in S07_PROCESS_LABELS:
+                self.adapter.write(S07_ALLOW, False)
+                self.adapter.write(S07_DONE, 0)
+                cycle.phase = "executing"
+                cycle.process = process
+                cycle.duration_seconds = self._delay_seconds("s07")
                 cycle.due_at = now + cycle.duration_seconds
+                events.append(
+                    HandshakeEvent(
+                        self._s07_action(process),
+                        "accepted",
+                        {
+                            "process": process,
+                            "process_label": S07_PROCESS_LABELS[process],
+                        },
+                    )
+                )
         elif cycle.phase == "executing" and now >= cycle.due_at:
-            self._write(S09_DONE, cycle.process)
+            if cycle.process == 3:
+                self.adapter.write(S07_BALANCE_READING, self.s07_balance_reading)
+            self.adapter.write(S07_DONE, cycle.process)
             cycle.phase = "await_reset"
             events.append(
                 HandshakeEvent(
-                    SUPPORTED_ACTIONS[9],
+                    self._s07_action(cycle.process),
+                    "completed",
+                    {
+                        "process": cycle.process,
+                        "process_label": S07_PROCESS_LABELS[cycle.process],
+                    },
+                )
+            )
+        elif cycle.phase == "await_reset":
+            if not params_written and process == 0:
+                self.adapter.write(S07_DONE, 0)
+                self.adapter.write(S07_ALLOW, True)
+                events.append(
+                    HandshakeEvent(
+                        self._s07_action(cycle.process),
+                        "reset",
+                        {
+                            "process": cycle.process,
+                            "process_label": S07_PROCESS_LABELS[cycle.process],
+                        },
+                    )
+                )
+                cycle.phase = "idle"
+                cycle.process = 0
+        return events
+
+    def _s07_action(self, process: int) -> str:
+        if self.workflow == S07_MATERIAL_WORKFLOW:
+            if process == 2:
+                return S07_MATERIAL_PREPARE_ACTION
+            if process == 3:
+                return S07_MATERIAL_DOSE_ACTION
+        if self.workflow == SINGLE_SAMPLE_WORKFLOW and process == 3:
+            return SINGLE_SAMPLE_S07_DOSE_ACTION
+        return S07_SOLID_ACTION_BY_PROCESS[process]
+
+    def _step_s08(self, now: float) -> list[HandshakeEvent]:
+        """模拟 S08 开/关盖工艺，并在 Edge 复位参数后清零完成码。"""
+
+        cycle = self.s08_cycle
+        events: list[HandshakeEvent] = []
+        process = int(self.adapter.read(S08_PROCESS) or 0)
+        params_written = bool(self.adapter.read(S08_PARAMS_WRITTEN))
+        cap_storage_slot = int(self.adapter.read(S08_CAP_STORAGE_SLOT) or 0)
+
+        if cycle.phase == "idle":
+            if params_written and process in S08_PROCESS_LABELS:
+                self.adapter.write(S08_ALLOW, False)
+                self.adapter.write(S08_DONE, 0)
+                cycle.phase = "executing"
+                cycle.process = process
+                cycle.position = cap_storage_slot
+                cycle.duration_seconds = self._delay_seconds("s08")
+                cycle.due_at = now + cycle.duration_seconds
+                events.append(
+                    HandshakeEvent(
+                        self._s08_action(process),
+                        "accepted",
+                        {
+                            "process": process,
+                            "process_label": S08_PROCESS_LABELS[process],
+                            "cap_storage_slot": cap_storage_slot,
+                        },
+                    )
+                )
+        elif cycle.phase == "executing" and now >= cycle.due_at:
+            if cycle.position in S08_CAP_STORAGE_SENSOR:
+                self.adapter.write(
+                    S08_CAP_STORAGE_SENSOR[cycle.position],
+                    cycle.process in {1, 3, 5},
+                )
+            self.adapter.write(S08_DONE, cycle.process)
+            cycle.phase = "await_reset"
+            events.append(
+                HandshakeEvent(
+                    self._s08_action(cycle.process),
+                    "completed",
+                    {
+                        "process": cycle.process,
+                        "process_label": S08_PROCESS_LABELS[cycle.process],
+                        "cap_storage_slot": cycle.position,
+                    },
+                )
+            )
+        elif cycle.phase == "await_reset":
+            if not params_written and process == 0 and cap_storage_slot == 0:
+                self.adapter.write(S08_DONE, 0)
+                self.adapter.write(S08_ALLOW, True)
+                events.append(
+                    HandshakeEvent(
+                        self._s08_action(cycle.process),
+                        "reset",
+                        {
+                            "process": cycle.process,
+                            "process_label": S08_PROCESS_LABELS[cycle.process],
+                            "cap_storage_slot": cycle.position,
+                        },
+                    )
+                )
+                cycle.phase = "idle"
+                cycle.process = 0
+                cycle.position = 0
+        return events
+
+    def _s08_action(self, process: int) -> str:
+        if self.workflow == SINGLE_SAMPLE_WORKFLOW:
+            if process in {5, 6}:
+                return SINGLE_SAMPLE_S08_LIQUID_CAP_ACTION
+            if process in {3, 4}:
+                return SINGLE_SAMPLE_S08_SAMPLE_CAP_ACTION
+        return S08_CAP_ACTION
+
+    def _step_s09(self, now: float) -> list[HandshakeEvent]:
+        """模拟 S09 单工艺握手；支持 add_liquid 的 5→7→8→6 连续序列。"""
+
+        cycle = self.s09_cycle
+        events: list[HandshakeEvent] = []
+        process = int(self.adapter.read(S09_PROCESS) or 0)
+        params_written = bool(self.adapter.read(S09_PARAMS_WRITTEN))
+
+        if cycle.phase == "idle":
+            # 新驱动会保持参数完成信号，直到工艺完成后统一清零。必须同时
+            # 观察到有效工艺号和参数完成，避免把残留工艺号当作新请求。
+            if params_written and process in S09_PROCESS_LABELS:
+                self.adapter.write(S09_ALLOW, False)
+                self.adapter.write(S09_DONE, 0)
+                cycle.phase = "executing"
+                cycle.process = process
+                cycle.duration_seconds = self._delay_seconds("s09")
+                cycle.due_at = now + cycle.duration_seconds
+                events.append(
+                    HandshakeEvent(
+                        self._s09_action(),
+                        "accepted",
+                        {
+                            "process": process,
+                            "process_label": S09_PROCESS_LABELS[process],
+                            "params_written": params_written,
+                        },
+                    )
+                )
+        elif cycle.phase == "executing" and now >= cycle.due_at:
+            if cycle.process in {8, 9, 10}:
+                self.adapter.write(S09_BALANCE_STABLE, True)
+                self.adapter.write(S09_BALANCE_READING, self.s09_balance_reading)
+            self.adapter.write(S09_DONE, cycle.process)
+            cycle.phase = "await_reset"
+            events.append(
+                HandshakeEvent(
+                    self._s09_action(),
                     "completed",
                     {
                         "process": cycle.process,
                         "process_label": S09_PROCESS_LABELS[cycle.process],
-                        "duration_seconds": cycle.duration_seconds,
                     },
                 )
             )
-        elif cycle.phase == "await_reset" and process != cycle.process:
-            self._write(S09_DONE, 0)
-            self._write(S09_ALLOW, True)
-            events.append(
-                HandshakeEvent(
-                    SUPPORTED_ACTIONS[9],
-                    "reset",
-                    {"process": cycle.process, "observed_process": process},
+        elif cycle.phase == "await_reset":
+            # Edge 收到完成码后会把工艺号和参数完成信号一起清零。二者都
+            # 复位才允许新一轮，和当前驱动的 finally 清理顺序保持一致。
+            if not params_written and process == 0:
+                self.adapter.write(S09_DONE, 0)
+                self.adapter.write(S09_ALLOW, True)
+                events.append(
+                    HandshakeEvent(
+                        self._s09_action(),
+                        "reset",
+                        {
+                            "process": cycle.process,
+                            "observed_process": process,
+                        },
+                    )
                 )
-            )
-            self.s09 = CycleState()
+                cycle.phase = "idle"
+                cycle.process = 0
         return events
 
-    def _delay_seconds(self, group: str, key: Optional[str] = None) -> float:
-        delay = self.delays.get(key or "", self.delays.get(group, self.delay_ms))
-        return max(0, int(delay)) / 1000.0
+    def _s09_action(self) -> str:
+        if self.workflow == SINGLE_SAMPLE_WORKFLOW:
+            return SINGLE_SAMPLE_S09_ACTION
+        return S09_ADD_LIQUID_ACTION
 
-    def _s04_duration_seconds(self, position: int) -> float:
-        name = s04_duration(position)
-        if name not in self.nodes:
-            return self._delay_seconds("s04", f"s04:{position}")
+    def _delay_seconds(self, group: str) -> float:
+        return self.delays.get(group, self.process_delay)
+
+    def _stirrer_duration_seconds(self) -> float:
+        """优先采用驱动写入的 S04 毫秒时长，节点缺失时回退配置延时。"""
+
         try:
-            duration_ms = int(self._read(name) or 0)
-        except (TypeError, ValueError):
-            log.warning(
-                "%s 无法解析，改用配置延时",
-                name,
+            duration_ms = float(self.adapter.read(s04_duration(self.position)))
+        except (KeyError, TypeError, ValueError, RuntimeError):
+            return self._delay_seconds("stirrer")
+        return max(duration_ms, 0.0) / 1000.0
+
+
+def _print_catalog(specs: tuple[WorkflowSpec, ...]) -> None:
+    print(f"当前工作流数量: {len(specs)}")
+    print(f"已支持动作数量: {len(SUPPORTED_ACTIONS)}")
+    print()
+    for spec in specs:
+        print(f"[{spec.workflow_id}]")
+        print("  动作:")
+        for action in spec.actions:
+            supported = (
+                " [已支持握手]" if action.split("(")[0] in SUPPORTED_ACTIONS else ""
             )
-            return self._delay_seconds("s04", f"s04:{position}")
-        return max(0, duration_ms) / 1000.0
+            print(f"    - {action}{supported}")
+        print("  先决条件:")
+        for requirement in spec.requirements:
+            note = f"；{requirement.note}" if requirement.note else ""
+            print(
+                f"    - ({requirement.kind}/{requirement.phase}) "
+                f"{requirement.subject} {requirement.expectation}{note}"
+            )
+        print()
 
-    def _warn_unsupported_input(self, group: str, value: int) -> None:
-        warning = (group, value)
-        if warning in self._warned_inputs:
-            return
-        self._warned_inputs.add(warning)
-        log.warning(
-            "%s 收到无法执行的值 %s：当前工作流未启用、位置无效或对应传感器节点缺失",
-            group,
-            value,
-        )
 
-    def _read(self, name: str) -> Any:
-        return self.nodes[name].get_value()
+def _print_check(specs: tuple[WorkflowSpec, ...], adapter: VariableAdapter) -> bool:
+    all_passed = True
+    for spec in specs:
+        print(f"[{spec.workflow_id}]")
+        for requirement in spec.requirements:
+            passed, actual = requirement.evaluate(adapter)
+            if passed is None:
+                marker = "MANUAL"
+            elif passed:
+                marker = "PASS"
+            else:
+                marker = "FAIL"
+                all_passed = False
+            actual_text = "" if passed is None else f"，实际={actual!r}"
+            print(
+                f"  {marker:6} {requirement.subject} "
+                f"{requirement.expectation}{actual_text}"
+            )
+    return all_passed
 
-    def _write(self, name: str, value: Any) -> None:
-        node = self.nodes[name]
-        try:
-            variant_type = node.get_data_type_as_variant_type()
-            typed = self._coerce_for_variant(value, variant_type)
-            node.set_value(ua.Variant(typed, variant_type))
-        except AttributeError:
-            # 测试替身只需实现 get_value/set_value。
-            node.set_value(value)
 
-    @staticmethod
-    def _coerce_for_variant(value: Any, variant_type: ua.VariantType) -> Any:
-        if variant_type == ua.VariantType.Boolean:
-            return bool(value)
-        if variant_type in {
-            ua.VariantType.Byte,
-            ua.VariantType.SByte,
-            ua.VariantType.Int16,
-            ua.VariantType.UInt16,
-            ua.VariantType.Int32,
-            ua.VariantType.UInt32,
-            ua.VariantType.Int64,
-            ua.VariantType.UInt64,
-        }:
-            return int(value)
-        if variant_type in {ua.VariantType.Float, ua.VariantType.Double}:
-            return float(value)
-        if variant_type == ua.VariantType.String:
-            return str(value)
-        return value
+def _event_line(event: HandshakeEvent) -> str:
+    return json.dumps(
+        {
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "action": event.action,
+            "phase": event.phase,
+            "detail": event.detail,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
 
 
 def _config_path() -> str:
     return str(Path(__file__).with_name("config") / "szlab_handshake.yaml")
 
 
-def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="SZLab Poly Studio OPC UA 握手仿真驱动")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--url",
-        default="opc.tcp://127.0.0.1:4855/xuse_sim/",
-        help="OPC UA Server endpoint",
+        "command",
+        nargs="?",
+        choices=("list", "check", "serve"),
+        default="serve",
     )
     parser.add_argument("--config", default=_config_path(), help="YAML 配置文件")
-    parser.add_argument("--namespace-index", type=int, default=4)
-    parser.add_argument("--node-prefix", default="上位机通讯|")
-    parser.add_argument("--delay-ms", type=int, default=None)
-    parser.add_argument("--poll-ms", type=int, default=None)
-    parser.add_argument("--connect-timeout", type=float, default=15.0)
+    parser.add_argument("--url", default="opc.tcp://127.0.0.1:4855/xuse_sim/")
+    parser.add_argument("--node-prefix", default=None)
+    parser.add_argument("--username", default=None)
+    parser.add_argument("--password", default=None)
+    parser.add_argument("--position", type=int, default=None, help="S04 位置，1-6")
+    parser.add_argument("--pump", type=int, default=None, choices=(1, 2, 3))
+    parser.add_argument("--poll-interval", type=float, default=None)
+    parser.add_argument("--poll-ms", type=int, default=None, help="轮询间隔（毫秒）")
+    parser.add_argument(
+        "--process-delay",
+        type=float,
+        default=None,
+        help="无设备时长参数动作的统一延时（秒）",
+    )
+    parser.add_argument(
+        "--delay-ms", type=int, default=None, help="统一动作延时（毫秒）"
+    )
     parser.add_argument(
         "--workflow",
-        choices=("all", *WORKFLOW_IDS),
+        choices=("all", *WORKFLOW_IDS, *WORKFLOW_ALIASES),
         default=None,
-        help="只启用指定工作流所需的节点、初值和握手状态机",
+        help="只列出/检查指定工作流；serve 时同时启用该场景所需的特殊初始化",
     )
-    parser.add_argument(
-        "--position",
-        type=int,
-        choices=range(1, 7),
-        default=None,
-        help="S04 调试位置，1-6",
-    )
-    parser.add_argument("--pump", type=int, choices=(1, 2, 3), default=None)
     parser.add_argument(
         "--s06-robot-workflow",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="让 S06 烧杯在位信号由机器人任务 11/12 驱动",
+        help="完整模拟 S06 机器人工作流：初始烧杯传感器为 False，并响应机器人任务号 11/12",
     )
     parser.add_argument(
         "--s09-pipetting-workflow",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="初始化并响应完整 S09 移液工作流",
+        help="完整模拟 S09 移液工作流：初始化工位/液量，并响应工艺 5、7、8、6",
     )
-    parser.add_argument("--s09-remaining-volume-ml", type=float, default=None)
-    parser.add_argument("--strict", action="store_true", help="缺少任一协议节点时退出")
-    parser.add_argument("--no-initialize", action="store_true", help="不写入 PLC 侧初始状态")
     parser.add_argument(
-        "--cleanup-on-exit",
-        action=argparse.BooleanOptionalAction,
+        "--s09-remaining-volume-ml",
+        type=float,
         default=None,
-        help="正常退出时清理仿真器拥有的 PLC 输出",
+        help="S09 1-5 号液体瓶的初始余量（mL，默认 100）",
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--s07-balance-reading",
+        type=float,
+        default=None,
+        help="S07 注粉完成时写入的模拟天平读数（默认 1.0）",
+    )
+    parser.add_argument(
+        "--s09-balance-reading",
+        type=float,
+        default=None,
+        help="S09 放液/测密度完成时写入的模拟天平读数（默认 1.0）",
+    )
+    parser.add_argument(
+        "--max-actions",
+        type=int,
+        default=0,
+        help="完成指定数量的交互动作后退出；0 表示持续运行",
+    )
+    parser.add_argument(
+        "--no-initialize",
+        action="store_true",
+        help="不写入 PLC→PC 仿真初值",
+    )
+    parser.add_argument(
+        "--keep-state-on-exit",
+        action="store_true",
+        help="退出时不把仿真器负责的 PLC→PC 信号恢复为安全初始值",
+    )
+    return parser
 
 
-def _config_bool(
-    cli_value: Optional[bool],
-    config: Dict[str, Any],
-    key: str,
-    default: bool,
-) -> bool:
-    return bool(config.get(key, default)) if cli_value is None else bool(cli_value)
-
-
-def main() -> int:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     config = load_yaml(args.config)
-    simulator = SzlabHandshakeSimulator(
-        url=args.url,
-        namespace_index=args.namespace_index,
-        node_prefix=args.node_prefix,
-        delay_ms=args.delay_ms if args.delay_ms is not None else int(config.get("delay_ms", 120)),
-        poll_ms=args.poll_ms if args.poll_ms is not None else int(config.get("poll_ms", 20)),
-        # 显式全局延时覆盖 YAML 的分组延时。设备动作自身的时间参数
-        # （如 S04 磁搅时间）仍然优先，delay_ms 只是无时间参数时的仿真延时。
-        delays={} if args.delay_ms is not None else dict(config.get("delays", {})),
-        initial_values=dict(config.get("initial_values", {})),
-        strict=args.strict,
-        workflow=args.workflow or str(config.get("workflow", "all")),
-        position=(
-            args.position
-            if args.position is not None
-            else int(config.get("position", 1))
-        ),
-        pump=args.pump if args.pump is not None else int(config.get("pump", 1)),
-        s06_robot_workflow=_config_bool(
-            args.s06_robot_workflow,
-            config,
-            "s06_robot_workflow",
-            False,
-        ),
-        s09_pipetting_workflow=_config_bool(
-            args.s09_pipetting_workflow,
-            config,
-            "s09_pipetting_workflow",
-            True,
-        ),
-        s09_remaining_volume_ml=(
-            args.s09_remaining_volume_ml
-            if args.s09_remaining_volume_ml is not None
-            else float(config.get("s09_remaining_volume_ml", 100.0))
-        ),
+    position = (
+        args.position if args.position is not None else int(config.get("position", 1))
     )
-    cleanup_on_exit = _config_bool(
-        args.cleanup_on_exit,
-        config,
-        "cleanup_on_exit",
-        True,
-    )
-
-    def _request_stop(signum: int, frame: Any) -> None:
-        del frame
-        log.info("收到信号 %s，正在停止", signum)
-        simulator.stop()
-
-    signal.signal(signal.SIGINT, _request_stop)
-    try:
-        signal.signal(signal.SIGTERM, _request_stop)
-    except (AttributeError, ValueError):
-        pass
-
-    initialized = False
-    try:
-        simulator.connect(timeout=args.connect_timeout)
-        initialized = not args.no_initialize
-        simulator.run_forever(initialize=initialized)
-    except (ConnectionError, RuntimeError, ValueError) as exc:
-        log.error("%s", exc)
+    pump = args.pump if args.pump is not None else int(config.get("pump", 1))
+    requested_workflow = args.workflow or str(config.get("workflow", "all"))
+    selected_workflow = WORKFLOW_ALIASES.get(requested_workflow, requested_workflow)
+    if selected_workflow not in ("all", *WORKFLOW_IDS):
+        print(f"不支持的握手工作流: {requested_workflow}", file=sys.stderr)
         return 2
-    finally:
-        if initialized and cleanup_on_exit and simulator._connected:
-            try:
+
+    if args.delay_ms is not None:
+        process_delay = max(args.delay_ms, 0) / 1000.0
+        delays: dict[str, float] = {}
+    elif args.process_delay is not None:
+        process_delay = max(args.process_delay, 0.0)
+        delays = {}
+    else:
+        process_delay = max(float(config.get("delay_ms", 500)), 0.0) / 1000.0
+        delay_aliases = {"s04": "stirrer", "s06": "pump"}
+        delays = {
+            delay_aliases.get(str(key), str(key)): max(float(value), 0.0) / 1000.0
+            for key, value in dict(config.get("delays", {})).items()
+        }
+
+    if args.poll_ms is not None:
+        poll_interval = max(args.poll_ms, 5) / 1000.0
+    elif args.poll_interval is not None:
+        poll_interval = max(args.poll_interval, 0.005)
+    else:
+        poll_interval = max(float(config.get("poll_ms", 20)), 5.0) / 1000.0
+
+    def config_bool(cli_value: bool | None, key: str, default: bool) -> bool:
+        return bool(config.get(key, default)) if cli_value is None else bool(cli_value)
+
+    s06_robot_workflow = config_bool(
+        args.s06_robot_workflow,
+        "s06_robot_workflow",
+        False,
+    )
+    s09_pipetting_workflow = config_bool(
+        args.s09_pipetting_workflow,
+        "s09_pipetting_workflow",
+        False,
+    )
+    s09_remaining_volume_ml = (
+        args.s09_remaining_volume_ml
+        if args.s09_remaining_volume_ml is not None
+        else float(config.get("s09_remaining_volume_ml", 100.0))
+    )
+    s07_balance_reading = (
+        args.s07_balance_reading
+        if args.s07_balance_reading is not None
+        else float(config.get("s07_balance_reading", 1.0))
+    )
+    s09_balance_reading = (
+        args.s09_balance_reading
+        if args.s09_balance_reading is not None
+        else float(config.get("s09_balance_reading", 1.0))
+    )
+
+    specs = build_workflow_specs(position=position, pump=pump)
+    if selected_workflow != "all":
+        specs = tuple(spec for spec in specs if spec.workflow_id == selected_workflow)
+    if args.command == "list":
+        _print_catalog(specs)
+        return 0
+
+    adapter = OpcUaVariableAdapter(
+        args.url,
+        args.node_prefix or str(config.get("node_prefix", DEFAULT_NODE_PREFIX)),
+        username=args.username or str(config.get("username", "")),
+        password=args.password or str(config.get("password", "")),
+    )
+    print(f"连接 OPC UA: {args.url}")
+    adapter.connect()
+    print("OPC UA 已连接")
+    try:
+        if args.command == "check":
+            return 0 if _print_check(specs, adapter) else 2
+
+        simulator = WorkflowHandshakeSimulator(
+            adapter,
+            position=position,
+            pump=pump,
+            process_delay=process_delay,
+            delays=delays,
+            initial_values=dict(config.get("initial_values", {})),
+            s06_robot_workflow=s06_robot_workflow,
+            s09_pipetting_workflow=s09_pipetting_workflow,
+            s09_remaining_volume_ml=s09_remaining_volume_ml,
+            s07_balance_reading=s07_balance_reading,
+            s09_balance_reading=s09_balance_reading,
+            workflow=requested_workflow,
+        )
+        if not args.no_initialize:
+            print(f"写入握手场景 {selected_workflow!r} 的仿真先决条件...")
+            simulator.initialize()
+            checks = simulator.check_supported_prerequisites()
+            failed = [item for item in checks if not item[1]]
+            for name, passed, expected, actual in checks:
+                print(
+                    f"  {'PASS' if passed else 'FAIL'} {name}: "
+                    f"expected={expected!r}, actual={actual!r}"
+                )
+            if failed:
+                print("先决条件写入后校验失败，拒绝进入握手循环", file=sys.stderr)
+                return 3
+
+        print("握手仿真器已启动；按 Ctrl+C 停止。")
+        print("S05 为只读完成信号，已保持 S05加工完成=True、S05拍照结果=1。")
+        stop_requested = False
+
+        def _request_stop(_signum: int, _frame: Any) -> None:
+            nonlocal stop_requested
+            stop_requested = True
+
+        previous_sigint = signal.signal(signal.SIGINT, _request_stop)
+        previous_sigterm: Any = None
+        try:
+            previous_sigterm = signal.signal(signal.SIGTERM, _request_stop)
+        except (AttributeError, ValueError):
+            pass
+        try:
+            while not stop_requested:
+                for event in simulator.step():
+                    print(_event_line(event), flush=True)
+                if (
+                    args.max_actions > 0
+                    and simulator.completed_actions >= args.max_actions
+                    and simulator.all_cycles_idle()
+                ):
+                    print(
+                        f"已完成 {simulator.completed_actions} 个动作，退出握手循环。"
+                    )
+                    break
+                time.sleep(poll_interval)
+        finally:
+            signal.signal(signal.SIGINT, previous_sigint)
+            if previous_sigterm is not None:
+                signal.signal(signal.SIGTERM, previous_sigterm)
+            cleanup_on_exit = bool(config.get("cleanup_on_exit", True))
+            if (
+                not args.keep_state_on_exit
+                and cleanup_on_exit
+                and not args.no_initialize
+            ):
+                print("恢复仿真器负责的 PLC→PC 信号...")
                 simulator.cleanup()
-            except Exception as exc:  # noqa: BLE001
-                log.warning("清理 PLC 侧握手输出失败：%s", exc)
-        simulator.disconnect()
-    return 0
+        return 0
+    finally:
+        adapter.disconnect()
+        print("OPC UA 已断开")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

@@ -516,11 +516,12 @@ $("btnServerStop").onclick = () => stopManagedProcess(
 );
 
 const SZLAB_S04_WORKFLOWS = new Set([
+  "all",
   "szlab_magnetic_stirring_workflow",
   "szlab_robot_action_workflow",
   "s04_robot_stirring_workflow",
-  "szlab_stack_s05_s06_workflow",
   "szlab_robot_liquid_stirring_demo_workflow",
+  "s_z_lab_单样品全流程_物料感知",
 ]);
 const SZLAB_PUMP_WORKFLOWS = new Set([
   "all",
@@ -528,7 +529,20 @@ const SZLAB_PUMP_WORKFLOWS = new Set([
   "szlab_stack_s05_s06_workflow",
   "szlab_mixer_workflow",
   "szlab_mixer_pump_production",
+  "szlab_material_s06_workflow",
   "szlab_robot_liquid_stirring_demo_workflow",
+  "s_z_lab_单样品全流程_物料感知",
+]);
+const SZLAB_S07_WORKFLOWS = new Set([
+  "all",
+  "szlab_s07_solid_addition_workflow",
+  "s07_粉桶与烧杯搬运后固体称量",
+  "s_z_lab_单样品全流程_物料感知",
+]);
+const SZLAB_S09_WORKFLOWS = new Set([
+  "all",
+  "s09_移液调试",
+  "s_z_lab_单样品全流程_物料感知",
 ]);
 
 function syncSzlabAgentOptions() {
@@ -544,7 +558,13 @@ function syncSzlabAgentOptions() {
     "hidden", !SZLAB_PUMP_WORKFLOWS.has(workflow)
   );
   $("agentS09VolumeField").classList.toggle(
-    "hidden", workflow !== "all" && workflow !== "szlab_s09_pipetting_workflow"
+    "hidden", !SZLAB_S09_WORKFLOWS.has(workflow)
+  );
+  $("agentS07BalanceField").classList.toggle(
+    "hidden", !SZLAB_S07_WORKFLOWS.has(workflow)
+  );
+  $("agentS09BalanceField").classList.toggle(
+    "hidden", !SZLAB_S09_WORKFLOWS.has(workflow)
   );
   $("agentDelayField").classList.toggle(
     "hidden", workflow === "szlab_photoshotting_workflow"
@@ -555,7 +575,7 @@ function setAgentFormDisabled(disabled) {
   for (const id of [
     "agentProfile", "agentCsv", "agentHost", "agentPort", "agentCfg",
     "agentWorkflow", "agentPosition", "agentPump", "agentDelayMs",
-    "agentPollMs", "agentS09Volume",
+    "agentPollMs", "agentS09Volume", "agentS07Balance", "agentS09Balance",
   ]) {
     $(id).disabled = disabled;
   }
@@ -599,9 +619,19 @@ $("btnAgentStart").onclick = async () => {
       if (SZLAB_PUMP_WORKFLOWS.has(workflow)) {
         body.pump = readAgentNumber("agentPump", "储液泵", 1, 3, true);
       }
-      if (workflow === "all" || workflow === "szlab_s09_pipetting_workflow") {
+      if (SZLAB_S09_WORKFLOWS.has(workflow)) {
         body.s09_remaining_volume_ml = readAgentNumber(
           "agentS09Volume", "S09 初始余量", 0.1, Number.MAX_SAFE_INTEGER
+        );
+        body.s09_balance_reading = readAgentNumber(
+          "agentS09Balance", "S09 模拟天平读数",
+          -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER
+        );
+      }
+      if (SZLAB_S07_WORKFLOWS.has(workflow)) {
+        body.s07_balance_reading = readAgentNumber(
+          "agentS07Balance", "S07 模拟天平读数",
+          -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER
         );
       }
     }
@@ -615,6 +645,10 @@ $("agentProfile").onchange = () => {
   $("agentCfg").value = szlab
     ? "config/szlab_handshake.yaml"
     : "config/xuse_handshake.yaml";
+  if (szlab && $("simCsv").value.trim() === "data/demo_variables.csv") {
+    $("simCsv").value = "data/szlab_plc_0731.csv";
+    $("agentCsv").value = "data/szlab_plc_0731.csv";
+  }
   syncSzlabAgentOptions();
 };
 $("agentWorkflow").onchange = syncSzlabAgentOptions;

@@ -234,17 +234,15 @@ python handshake_agent.py `
 
 ## SZLab Poly Studio 握手仿真
 
-`szlab_handshake_agent.py` 根据 Uni-Lab-OS 的 SZLab 设备驱动契约模拟 PLC
-侧响应，覆盖：
+`szlab_handshake_agent.py` 以官方 Uni-Lab-SZLab `fc98392` 的驱动和
+`scripts/szlab_workflow_handshake.py` 为协议基线，覆盖全部 17 个 Python
+工作流和 37 个唯一动作。状态机通过最小变量读写 interface 运行，OPC UA
+只是其中一个 adapter，因此协议测试不需要启动网络服务。
 
-- Robot 任务 `7/8/11/12/13/15/16` 的允许写入、任务完成和回环复位；
-- Robot 在 S04、S06、S071、S072 放取料时对应的物料在位传感器联动；
-- S04 六个磁搅位置（工艺 `1-3`）；
-- S05 拍照完成与 OK 结果；
-- S06 加液（工艺 `1-3`，参数写入标志复位后重新允许加工）；
-- S07 固体加样（工艺 `1-3`）；
-- S08 开关盖（工艺 `1-6`，等待瓶盖暂存位一并复位）；
-- S09 移液（工艺 `1-10`，即使未捕获到短暂的参数完成脉冲也能接单）。
+覆盖范围包括 Robot 标准任务 `1/3-25`、S02-S11 物料在位传感器、S04
+磁搅、S05 拍照、S06 加液、S07 扫码/转位/注粉、S08 开关盖、S09 移液，
+以及标准物料转运和单样品物料感知全流程。S07/S09 天平值、S08 瓶盖暂存位、
+S09 TIP 盒/试剂瓶工位和液体余量都会随协议初始化或动作完成更新。
 
 先启动包含 SZLab 节点的 OPC UA Server，再运行：
 
@@ -259,9 +257,10 @@ start_szlab_handshake.bat opc.tcp://127.0.0.1:4855/xuse_sim/
 ```
 
 GUI 的“握手代理”中可将“仿真协议”切换为 `SZLab Poly Studio`。
-切换后会显示“工作流调试参数”，可从 Uni-Lab-SZLab 当前 13 个工作流中
+切换后会自动选用内置 `data/szlab_plc_0731.csv`，并显示“工作流调试参数”。
+可从 Uni-Lab-SZLab 当前 17 个工作流中
 选择一个定向调试。代理只解析、初始化和轮询该工作流实际使用的节点；选择
-“全部工作流”时保持原有的全工位兼容模式。
+“全部官方工作流”时同时启用所有协议模块。
 
 命令行也支持同样的选择和参数覆盖：
 
@@ -277,21 +276,21 @@ python szlab_handshake_agent.py \
 
 | 参数 | 用途 |
 |---|---|
-| `--workflow` | `all` 或 13 个 SZLab 工作流 ID 之一 |
+| `--workflow` | `all` 或 17 个官方工作流 ID 之一；旧 S07/S09 ID 仍作为别名 |
 | `--position` | S04 调试位置，范围 `1-6` |
 | `--pump` | S06 储液瓶，`1`、`2` 或 `3`（双泵） |
 | `--delay-ms` | 统一覆盖无设备时间参数的动作延时；S04 磁搅优先使用本次动作的磁搅时间 |
 | `--poll-ms` | OPC UA 轮询间隔，最小 5 ms |
 | `--s09-remaining-volume-ml` | S09 1-5 号液体瓶的初始余量 |
+| `--s07-balance-reading` | S07 注粉完成时写入的模拟天平值 |
+| `--s09-balance-reading` | S09 放液/测密度完成时写入的模拟天平值 |
 
 仿真驱动优先使用实机格式
 `ns=4;s=上位机通讯|<变量名>`，找不到时按 BrowseName 递归匹配。
-缺失某个工位节点时默认只跳过该工位；命令行增加 `--strict` 可改为立即报错。
+缺少所选工作流需要的节点时会明确报错，不会静默跳过并让 Edge 一直等待。
 
-`szlab_stack_s05_s06_workflow` 同时兼容原有的 S05/S06 联调流程和
-`szlab-parallel-robot-lock-rev-1` revision。后者会并行执行 S05 拍照与 S06
-加液，随后两条分支依次申请同一个 Robot 任务 25（S08 倒料类型 1、2），汇合后
-执行 S04 搅拌。握手器在第一条 Robot 握手复位前不会接收第二条，从而模拟设备锁。
+`szlab_stack_s05_s06_workflow` 已恢复为官方定义：读取堆栈状态后执行 S05
+拍照和 S06 加液，不再复用旧的 `szlab-parallel-robot-lock-rev-1` 私有 revision。
 
 延时、工作流和 PLC 侧初始值位于 `config/szlab_handshake.yaml`。命令行或 GUI
 显式参数优先于该配置：
@@ -299,25 +298,23 @@ python szlab_handshake_agent.py \
 - `workflow`：`all` 或指定工作流 ID；
 - `position`：S04 定向调试位置；
 - `pump`：初始化为在位的 S06 储液瓶，取值 `1`、`2` 或 `3`（两瓶）；
-- `s06_robot_workflow`：启用后，S06 烧杯传感器由机器人任务 `11/12` 放置和取走；
-- `s09_pipetting_workflow`：初始化 S09 工位、液体余量并响应全部内部工艺；
+- `s06_robot_workflow`：兼容开关；选择 S06 机器人或物料工作流时会自动启用；
+- `s09_pipetting_workflow`：兼容开关；选择 S09 或单样品工作流时会自动启用；
 - `s09_remaining_volume_ml`：S09 1-5 号液体瓶的初始余量；
+- `s07_balance_reading` / `s09_balance_reading`：动作完成时反馈的模拟天平值；
 - `cleanup_on_exit`：正常停止时清理仿真器拥有的 PLC 输出，但保留 PC 写入的任务号、
   工艺号和参数标志。
 
 S04 磁搅接单后会读取 `磁搅时间设置_上位机[position-1]`，该值单位为
 毫秒。例如单点动作的 `duration=30` 会写入 `30000`，代理在 30 秒后才反馈
-S04 加工完成。如果 Server 不提供该节点，代理仍使用 `delays.s04` 的固定仿真延时。
+S04 加工完成。如果 Server 不提供该节点，代理使用 `delays.stirrer` 的固定延时。
+其他协议模块分别使用 `delays.robot/pump/s07/s08/s09`。
 
-S09 启动时如果已经存在非零工艺号，但没有参数完成信号，代理会将它视为上次
-中断留下的残留值，等待工艺号变化或新的参数完成脉冲，不会提前反馈完成。
+S09 按新版驱动保持 `S09参数写入完成=True` 直到本工艺完成，代理只有同时看到
+有效工艺号和参数完成信号才接单；Edge 将二者清零后，代理才复位完成码并允许下一轮。
 
-默认配置已开启完整的 S06 机器人和 S09 移液工作流。物料在位传感器会在启动时
-初始化，并由对应机器人任务自动更新，无需设置 `SKIP_SENSOR_PRECHECK`。
-
-当前 Uni-Lab-SZLab 驱动默认使用 `szlab_plc_0730.csv`。已校验该表包含仿真器
-所需的全部 106 个节点；启动仿真 Server 时应加载这份节点表，或加载从更新 PLC
-工程提取且包含同等节点的 CSV。
+内置 `data/szlab_plc_0731.csv` 与官方部署图一致，并由测试校验包含全部握手变量。
+启动仿真 Server 时应加载这份表，或加载从更新 PLC 工程提取且包含同等节点的 CSV。
 
 ## Web GUI
 

@@ -328,7 +328,7 @@
                 <label class="field full">
                   <span>调试工作流</span>
                   <select id="agentWorkflow">
-                    <option value="all">全部工作流（兼容模式）</option>
+                    <option value="all">全部官方工作流</option>
                     <option value="szlab_magnetic_stirring_workflow">S04 磁力搅拌</option>
                     <option value="szlab_photoshotting_workflow">S05 拍照</option>
                     <option value="szlab_robot_action_workflow">S04 机器人取放料</option>
@@ -337,11 +337,15 @@
                     <option value="s07_robot_workflow">S07 机器人粉罐与产品转运</option>
                     <option value="szlab_s07_solid_addition_workflow">S07 固体加样</option>
                     <option value="s08_cap_workflow">S08 开关盖</option>
-                    <option value="szlab_s09_pipetting_workflow">S09 移液</option>
-                    <option value="szlab_stack_s05_s06_workflow">S05 + S06 并行 / Robot 锁 / S04 搅拌</option>
+                    <option value="s09_移液调试">S09 移液调试</option>
+                    <option value="szlab_stack_s05_s06_workflow">堆栈状态 + S05 拍照 + S06 加液</option>
                     <option value="szlab_mixer_workflow">混配加液</option>
                     <option value="szlab_mixer_pump_production">加液生产流程</option>
+                    <option value="szlab_material_s06_workflow">S03/S06 物料感知加液</option>
                     <option value="szlab_robot_liquid_stirring_demo_workflow">机器人转运 + S06 加液 + S04 搅拌演示</option>
+                    <option value="s07_粉桶与烧杯搬运后固体称量">S07 粉桶/烧杯转运与称量</option>
+                    <option value="s_z_lab_标准物料转运">标准物料转运</option>
+                    <option value="s_z_lab_单样品全流程_物料感知">单样品全流程（物料感知）</option>
                   </select>
                 </label>
                 <label class="field" id="agentPositionField">
@@ -368,6 +372,14 @@
                 <label class="field full" id="agentS09VolumeField">
                   <span>S09 液体瓶初始余量 <em>mL</em></span>
                   <input id="agentS09Volume" type="number" value="100" min="0.1" step="0.1">
+                </label>
+                <label class="field" id="agentS07BalanceField">
+                  <span>S07 模拟天平读数</span>
+                  <input id="agentS07Balance" type="number" value="1" step="0.001">
+                </label>
+                <label class="field" id="agentS09BalanceField">
+                  <span>S09 模拟天平读数</span>
+                  <input id="agentS09Balance" type="number" value="1" step="0.001">
                 </label>
               </div>
             </details>
