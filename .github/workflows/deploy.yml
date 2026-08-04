@@ -16,10 +16,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      # 仓库另外那 99MB 是厂商 PDF/zip，部署用不到，稀疏检出只拉 OpcUaSim
+      # 仓库另外的大型资料部署用不到，只拉 OpcUaSim 和测试会校验的 workflow 配置
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: OpcUaSim
+          sparse-checkout: |
+            OpcUaSim
+            .github/workflows
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
