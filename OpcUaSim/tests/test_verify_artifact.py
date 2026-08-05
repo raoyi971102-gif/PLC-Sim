@@ -26,62 +26,62 @@ VERIFY_ARTIFACT = _load_verify_artifact()
 
 
 def test_verify_windows_installer_checks_name_size_and_header(tmp_path) -> None:
-    installer = tmp_path / "OpcUaSim-Setup-Windows-x64-v0.2.4.exe"
+    installer = tmp_path / "OpcUaSim-Setup-Windows-x64-v0.2.5.exe"
     installer.write_bytes(b"MZ" + b"\0" * 30)
 
     assert VERIFY_ARTIFACT.verify_windows_installer(
         installer,
-        "0.2.4",
+        "0.2.5",
         minimum_bytes=32,
     ) == 32
 
 
 def test_verify_windows_installer_rejects_bad_header(tmp_path) -> None:
-    installer = tmp_path / "OpcUaSim-Setup-Windows-x64-v0.2.4.exe"
+    installer = tmp_path / "OpcUaSim-Setup-Windows-x64-v0.2.5.exe"
     installer.write_bytes(b"NO" + b"\0" * 30)
 
     with pytest.raises(ValueError, match="PE header"):
         VERIFY_ARTIFACT.verify_windows_installer(
             installer,
-            "0.2.4",
+            "0.2.5",
             minimum_bytes=32,
         )
 
 
 def test_verify_windows_installer_rejects_incomplete_file(tmp_path) -> None:
-    installer = tmp_path / "OpcUaSim-Setup-Windows-x64-v0.2.4.exe"
+    installer = tmp_path / "OpcUaSim-Setup-Windows-x64-v0.2.5.exe"
     installer.write_bytes(b"MZ")
 
     with pytest.raises(ValueError, match="incomplete"):
         VERIFY_ARTIFACT.verify_windows_installer(
             installer,
-            "0.2.4",
+            "0.2.5",
             minimum_bytes=32,
         )
 
 
 def test_verify_macos_dmg_checks_name_size_and_udif_trailer(tmp_path) -> None:
-    installer = tmp_path / "OpcUaSim-macOS-arm64-v0.2.4.dmg"
+    installer = tmp_path / "OpcUaSim-macOS-arm64-v0.2.5.dmg"
     contents = bytearray(1024)
     contents[-512:-508] = b"koly"
     installer.write_bytes(contents)
 
     assert VERIFY_ARTIFACT.verify_macos_dmg(
         installer,
-        "0.2.4",
+        "0.2.5",
         "arm64",
         minimum_bytes=1024,
     ) == 1024
 
 
 def test_verify_macos_dmg_rejects_bad_trailer(tmp_path) -> None:
-    installer = tmp_path / "OpcUaSim-macOS-x64-v0.2.4.dmg"
+    installer = tmp_path / "OpcUaSim-macOS-x64-v0.2.5.dmg"
     installer.write_bytes(b"\0" * 1024)
 
     with pytest.raises(ValueError, match="UDIF trailer"):
         VERIFY_ARTIFACT.verify_macos_dmg(
             installer,
-            "0.2.4",
+            "0.2.5",
             "x64",
             minimum_bytes=1024,
         )
@@ -94,7 +94,7 @@ def test_verify_macos_dmg_rejects_wrong_release_name(tmp_path) -> None:
     with pytest.raises(ValueError, match="Unexpected artifact name"):
         VERIFY_ARTIFACT.verify_macos_dmg(
             installer,
-            "0.2.4",
+            "0.2.5",
             "arm64",
             minimum_bytes=1024,
         )

@@ -83,7 +83,7 @@ def test_project_version_reader_matches_package_metadata() -> None:
         text=True,
     )
 
-    assert result.stdout.strip() == "0.2.4"
+    assert result.stdout.strip() == "0.2.5"
 
 
 def test_one_click_requirements_use_native_release_constraints() -> None:
