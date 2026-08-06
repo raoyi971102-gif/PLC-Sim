@@ -112,6 +112,47 @@ def test_s07_material_dosing_catalogs_standard_transfers_and_material_join() -> 
     assert adapter.read(handshake.ROBOT_TOOL_PAYLOAD_SENSOR) is False
 
 
+def test_standard_transfer_updates_site_and_tool_payload_witnesses() -> None:
+    """验证标准转运的取放料完成会同步库位与夹爪负载物理证据。"""
+
+    for workflow in (handshake.STANDARD_TRANSFER_WORKFLOW, "all"):
+        adapter = MemoryAdapter()
+        simulator = handshake.WorkflowHandshakeSimulator(
+            adapter,
+            process_delay=0.5,
+            workflow=workflow,
+        )
+        simulator.initialize()
+
+        source_sensor = handshake.s03_sensor(1, 1)
+        target_sensor = handshake.s04_sensor(1)
+        adapter.write(source_sensor, True)
+        adapter.write(target_sensor, False)
+        adapter.write(handshake.S03_ROBOT_PRODUCT, 1)
+        adapter.write(handshake.S03_ROBOT_POSITION, 1)
+        adapter.write(handshake.ROBOT_TASK_NUMBER, 6)
+        adapter.write(handshake.ROBOT_WRITE_DONE, True)
+        assert adapter.read(handshake.ROBOT_TOOL_PAYLOAD_SENSOR) is False
+
+        simulator.step(now=0.0)
+        simulator.step(now=0.5)
+
+        assert adapter.read(source_sensor) is False
+        assert adapter.read(handshake.ROBOT_TOOL_PAYLOAD_SENSOR) is True
+
+        adapter.write(handshake.ROBOT_WRITE_DONE, False)
+        simulator.step(now=0.6)
+        adapter.write(handshake.S04_ROBOT_POSITION, 1)
+        adapter.write(handshake.ROBOT_TASK_NUMBER, 7)
+        adapter.write(handshake.ROBOT_WRITE_DONE, True)
+
+        simulator.step(now=1.0)
+        simulator.step(now=1.5)
+
+        assert adapter.read(target_sensor) is True
+        assert adapter.read(handshake.ROBOT_TOOL_PAYLOAD_SENSOR) is False
+
+
 def test_robot_liquid_stirring_demo_has_five_actions_and_empty_stations() -> None:
     specs = handshake.build_workflow_specs()
     demo = next(
@@ -140,6 +181,8 @@ def test_robot_liquid_stirring_demo_has_five_actions_and_empty_stations() -> Non
 
 
 def test_s04_three_action_handshake_changes_sensor_and_resets() -> None:
+    """验证旧式 S04 三动作握手也维护夹爪负载物理见证。"""
+
     adapter = MemoryAdapter()
     simulator = handshake.WorkflowHandshakeSimulator(
         adapter,
@@ -163,6 +206,7 @@ def test_s04_three_action_handshake_changes_sensor_and_resets() -> None:
         (handshake.SUPPORTED_ACTIONS[0], "completed")
     ]
     assert adapter.read(handshake.s04_sensor(1)) is True
+    assert adapter.read(handshake.ROBOT_TOOL_PAYLOAD_SENSOR) is False
     assert adapter.read(handshake.ROBOT_TASK_COMPLETE) == 7
 
     adapter.write(handshake.ROBOT_WRITE_DONE, False)
@@ -200,6 +244,7 @@ def test_s04_three_action_handshake_changes_sensor_and_resets() -> None:
         (handshake.SUPPORTED_ACTIONS[2], "completed")
     ]
     assert adapter.read(handshake.s04_sensor(1)) is False
+    assert adapter.read(handshake.ROBOT_TOOL_PAYLOAD_SENSOR) is True
     assert simulator.completed_actions == 3
 
 

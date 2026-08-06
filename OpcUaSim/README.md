@@ -238,7 +238,7 @@ python handshake_agent.py `
 
 ## SZLab Poly Studio 握手仿真
 
-`szlab_handshake_agent.py` 以官方 Uni-Lab-SZLab `fc98392` 的驱动和
+`szlab_handshake_agent.py` 以官方 Uni-Lab-SZLab `2b248fa` 的驱动和
 `scripts/szlab_workflow_handshake.py` 为协议基线，覆盖全部 17 个 Python
 工作流和 37 个唯一动作。状态机通过最小变量读写 interface 运行，OPC UA
 只是其中一个 adapter，因此协议测试不需要启动网络服务。

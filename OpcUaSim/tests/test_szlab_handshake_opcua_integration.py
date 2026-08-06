@@ -9,6 +9,7 @@ from common import NodeDef
 from server import add_nodes, build_server, register_ns_padding
 from szlab_handshake_agent import (
     ROBOT_TASK_NUMBER,
+    ROBOT_TOOL_PAYLOAD_SENSOR,
     ROBOT_WRITE_DONE,
     S04_ROBOT_POSITION,
     S09_PARAMS_WRITTEN,
@@ -69,6 +70,8 @@ def _start_server(values: dict[str, Any]):
 
 
 def test_robot_handshake_through_real_opcua_adapter() -> None:
+    """验证真实 OPC UA 适配器暴露并更新机器人夹爪负载见证。"""
+
     seed = {
         ROBOT_TASK_NUMBER: 0,
         S04_ROBOT_POSITION: 0,
@@ -102,6 +105,7 @@ def test_robot_handshake_through_real_opcua_adapter() -> None:
         assert nodes["Robot_任务完成"].get_value() == 7
         assert nodes["Robot_任务允许写入"].get_value() is False
         assert nodes[s04_sensor(1)].get_value() is True
+        assert nodes[ROBOT_TOOL_PAYLOAD_SENSOR].get_value() is False
 
         nodes[ROBOT_WRITE_DONE].set_value(ua.Variant(False, ua.VariantType.Boolean))
         simulator.step(now=1.01)
