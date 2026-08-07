@@ -115,6 +115,7 @@ SZLAB_WORKFLOW_IDS = (
     "s07_粉桶与烧杯搬运后固体称量",
     "s_z_lab_标准物料转运",
     "s_z_lab_单样品全流程_物料感知",
+    "s_z_lab_烧杯五工位搬运",
 )
 SZLAB_WORKFLOW_ALIASES = (
     "s07_material_dosing",

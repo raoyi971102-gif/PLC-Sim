@@ -7,8 +7,8 @@
 2. ``check``：只读检查远端 OPC UA 中可自动判定的先决条件。
 3. ``serve``：写入测试先决条件，并监听 PC→PLC 信号，模拟 PLC 握手。
 
-协议目录同步自 Uni-Lab-SZLab ``2b248fa``，覆盖 ``workflows`` 目录中全部
-17 个 Python 工作流、37 个唯一动作调用。状态机只依赖 :class:`VariableAdapter`
+协议目录与 Uni-Lab-SZLab 当前工作流源码对齐，覆盖 ``workflows`` 目录中全部
+18 个 Python 工作流、37 个唯一动作调用。状态机只依赖 :class:`VariableAdapter`
 这一处 interface；OPC UA、内存测试替身等实现都作为 adapter 接入。
 握手场景名称使用工作流源码中的真实函数名；旧版 S07/S09 场景名仍作为兼容别名：
 
@@ -274,6 +274,7 @@ S07_MATERIAL_COMMIT_ACTION = SUPPORTED_ACTIONS[26]
 S07_MATERIAL_DOSE_ACTION = SUPPORTED_ACTIONS[27]
 SINGLE_SAMPLE_WORKFLOW = "s_z_lab_单样品全流程_物料感知"
 STANDARD_TRANSFER_WORKFLOW = "s_z_lab_标准物料转运"
+BEAKER_TRANSFER_CHAIN_WORKFLOW = "s_z_lab_烧杯五工位搬运"
 S07_MATERIAL_WORKFLOW = "s07_粉桶与烧杯搬运后固体称量"
 S09_WORKFLOW = "s09_移液调试"
 SINGLE_SAMPLE_S07_DOSE_ACTION = (
@@ -309,6 +310,7 @@ WORKFLOW_IDS = (
     S07_MATERIAL_WORKFLOW,
     STANDARD_TRANSFER_WORKFLOW,
     SINGLE_SAMPLE_WORKFLOW,
+    BEAKER_TRANSFER_CHAIN_WORKFLOW,
 )
 
 WORKFLOW_ALIASES = {
@@ -335,6 +337,7 @@ WORKFLOW_COMPONENTS = {
     ),
     S07_MATERIAL_WORKFLOW: frozenset({"robot_s03", "robot_s07", "s07"}),
     STANDARD_TRANSFER_WORKFLOW: frozenset({"robot_standard"}),
+    BEAKER_TRANSFER_CHAIN_WORKFLOW: frozenset({"robot_standard"}),
     SINGLE_SAMPLE_WORKFLOW: frozenset(
         {"robot_standard", "pump", "stirrer", "photo", "s07", "s08", "s09"}
     ),
@@ -591,7 +594,12 @@ def _robot_common() -> tuple[Requirement, ...]:
 
 
 def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec, ...]:
-    """返回仓库当前 17 个 Python 工作流的先决条件目录。"""
+    """返回仓库当前 18 个 Python 工作流的先决条件目录。
+
+    参数：``position`` 是 S04 调试库位编号；``pump`` 是 S06 储液泵选择。
+    返回：工作流（Workflow）标识、动作及 PLC 先决条件的不可变目录。
+    异常：库位编号或储液泵选择超出支持范围时抛出 ``ValueError``。
+    """
 
     position = int(position)
     pump = int(pump)
@@ -915,6 +923,23 @@ def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec
             for workflow_id in (STANDARD_TRANSFER_WORKFLOW,)
         ),
         WorkflowSpec(
+            BEAKER_TRANSFER_CHAIN_WORKFLOW,
+            (
+                "szlab_mixer_robot.pick",
+                "szlab_mixer_robot.place",
+                "host_node.transfer_resource",
+            ),
+            (
+                *standard_transfer_requirements,
+                _opc_eq(S03_BEAKER_SENSOR, True, note="S3-L1B1 取料源位必须有烧杯"),
+                _opc_eq(s072_sensor(2), False, note="S0722 必须为空"),
+                _opc_eq(S06_BEAKER_SENSOR, False, note="S061 必须为空"),
+                _opc_eq(S09_STATION_SENSOR[1], False, note="S09 BEAKER1 必须为空"),
+                _opc_eq(s04_sensor(1), False, note="S041 必须为空"),
+                _opc_eq(S05_MATERIAL_SENSOR, False, note="S051 必须为空"),
+            ),
+        ),
+        WorkflowSpec(
             SINGLE_SAMPLE_WORKFLOW,
             (
                 "szlab_mixer_robot.pick",
@@ -1190,7 +1215,12 @@ class WorkflowHandshakeSimulator:
         return WORKFLOW_COMPONENTS[self.workflow]
 
     def initialization_values(self) -> dict[str, Any]:
-        """返回当前工作流场景启动前应写入 PLC 的可验证初始值。"""
+        """返回当前工作流场景启动前应写入 PLC 的可验证初始值。
+
+        参数：无；使用当前代理的工作流选择和调试参数。
+        返回：PLC 节点名到仿真初值的映射；在位值仅是传感器观测，
+        不改写物料或库位（Site）的权威事实。
+        """
 
         components = self.enabled_components
         values: dict[str, Any] = {}
@@ -1215,6 +1245,17 @@ class WorkflowHandshakeSimulator:
                     s071_sensor(2): True,
                     s10_sensor(1): True,
                     s11_sensor(1, 1): False,
+                }
+            )
+        if self.workflow == BEAKER_TRANSFER_CHAIN_WORKFLOW:
+            values.update(
+                {
+                    S03_BEAKER_SENSOR: True,
+                    s072_sensor(2): False,
+                    S06_BEAKER_SENSOR: False,
+                    S09_STATION_SENSOR[1]: False,
+                    s04_sensor(1): False,
+                    S05_MATERIAL_SENSOR: False,
                 }
             )
         if "robot_s04" in components:
@@ -1308,7 +1349,11 @@ class WorkflowHandshakeSimulator:
         return {**values, **self.initial_value_overrides}
 
     def cleanup_values(self) -> dict[str, Any]:
-        """返回停止握手场景时用于撤销模拟物理状态的安全复位值。"""
+        """返回停止握手场景时用于撤销模拟物理状态的安全复位值。
+
+        参数：无；使用当前代理启用的协议组件。
+        返回：仅包含代理所有 PLC 输出的复位映射，不覆盖 Edge 输入。
+        """
 
         components = self.enabled_components
         values: dict[str, Any] = {}
@@ -1394,6 +1439,17 @@ class WorkflowHandshakeSimulator:
                     S09_BALANCE_STABLE: False,
                     S09_BALANCE_READING: 0.0,
                     **{s09_remaining_volume(index): 0.0 for index in range(1, 6)},
+                }
+            )
+        if self.workflow == BEAKER_TRANSFER_CHAIN_WORKFLOW:
+            values.update(
+                {
+                    S03_BEAKER_SENSOR: False,
+                    s072_sensor(2): False,
+                    S06_BEAKER_SENSOR: False,
+                    S09_STATION_SENSOR[1]: False,
+                    s04_sensor(1): False,
+                    S05_MATERIAL_SENSOR: False,
                 }
             )
         for name, initial_value in self.initial_value_overrides.items():

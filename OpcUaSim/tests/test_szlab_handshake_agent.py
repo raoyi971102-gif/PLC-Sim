@@ -33,9 +33,15 @@ class MemoryAdapter:
 
 
 def test_catalog_matches_official_workflow_snapshot() -> None:
+    """验证 PLC-Sim 目录与当前 18 个 SZLab 工作流快照一致。
+
+    参数：无。
+    返回：无；断言工作流（Workflow）标识和动作目录。
+    """
+
     specs = handshake.build_workflow_specs()
 
-    assert len(specs) == 17
+    assert len(specs) == 18
     assert len(handshake.SUPPORTED_ACTIONS) == 37
     assert {item.workflow_id for item in specs} == {
         "szlab_magnetic_stirring_workflow",
@@ -55,6 +61,7 @@ def test_catalog_matches_official_workflow_snapshot() -> None:
         "s07_粉桶与烧杯搬运后固体称量",
         "s_z_lab_标准物料转运",
         "s_z_lab_单样品全流程_物料感知",
+        "s_z_lab_烧杯五工位搬运",
     }
 
     catalog_actions = {
@@ -151,6 +158,73 @@ def test_standard_transfer_updates_site_and_tool_payload_witnesses() -> None:
 
         assert adapter.read(target_sensor) is True
         assert adapter.read(handshake.ROBOT_TOOL_PAYLOAD_SENSOR) is False
+
+
+def test_beaker_transfer_chain_handshake_moves_one_beaker_from_s0722() -> None:
+    """验证五工位握手使用 S0722 交接位逐段更新烧杯在位观测。
+
+    参数：无。
+    返回：无；断言五段取放后的源/目标传感器状态。
+    """
+
+    adapter = MemoryAdapter()
+    simulator = handshake.WorkflowHandshakeSimulator(
+        adapter,
+        position=1,
+        process_delay=0.5,
+        workflow=handshake.BEAKER_TRANSFER_CHAIN_WORKFLOW,
+    )
+    simulator.initialize()
+
+    assert adapter.read(handshake.S03_BEAKER_SENSOR) is True
+    for sensor in (
+        handshake.s072_sensor(2),
+        handshake.S06_BEAKER_SENSOR,
+        handshake.S09_STATION_SENSOR[1],
+        handshake.s04_sensor(1),
+        handshake.S05_MATERIAL_SENSOR,
+    ):
+        assert adapter.read(sensor) is False
+
+    clock = 0.0
+    steps = (
+        (6, handshake.S03_BEAKER_SENSOR, False),
+        (15, handshake.s072_sensor(2), True),
+        (16, handshake.s072_sensor(2), False),
+        (11, handshake.S06_BEAKER_SENSOR, True),
+        (12, handshake.S06_BEAKER_SENSOR, False),
+        (19, handshake.S09_STATION_SENSOR[1], True),
+        (20, handshake.S09_STATION_SENSOR[1], False),
+        (7, handshake.s04_sensor(1), True),
+        (8, handshake.s04_sensor(1), False),
+        (9, handshake.S05_MATERIAL_SENSOR, True),
+    )
+    for task, sensor, occupied in steps:
+        if task in (15, 16):
+            adapter.write(handshake.S072_ROBOT_PRODUCT, 2)
+        elif task in (19, 20):
+            adapter.write(handshake.S09_TRANSFER_PRODUCT, 3)
+            adapter.write(handshake.S09_TRANSFER_POSITION, 1)
+        elif task in (7, 8):
+            adapter.write(handshake.S04_ROBOT_POSITION, 1)
+
+        adapter.write(handshake.ROBOT_TASK_NUMBER, task)
+        adapter.write(handshake.ROBOT_WRITE_DONE, True)
+        simulator.step(now=clock)
+        simulator.step(now=clock + 0.5)
+        assert adapter.read(sensor) is occupied
+
+        adapter.write(handshake.ROBOT_WRITE_DONE, False)
+        simulator.step(now=clock + 0.6)
+        clock += 1.0
+
+    assert adapter.read(handshake.S03_BEAKER_SENSOR) is False
+    assert adapter.read(handshake.s072_sensor(2)) is False
+    assert adapter.read(handshake.S06_BEAKER_SENSOR) is False
+    assert adapter.read(handshake.S09_STATION_SENSOR[1]) is False
+    assert adapter.read(handshake.s04_sensor(1)) is False
+    assert adapter.read(handshake.S05_MATERIAL_SENSOR) is True
+    assert simulator.completed_actions == len(steps)
 
 
 def test_robot_liquid_stirring_demo_has_five_actions_and_empty_stations() -> None:

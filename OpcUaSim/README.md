@@ -238,14 +238,15 @@ python handshake_agent.py `
 
 ## SZLab Poly Studio 握手仿真
 
-`szlab_handshake_agent.py` 以官方 Uni-Lab-SZLab `2b248fa` 的驱动和
-`scripts/szlab_workflow_handshake.py` 为协议基线，覆盖全部 17 个 Python
+`szlab_handshake_agent.py` 以官方 Uni-Lab-SZLab 当前驱动和
+`scripts/szlab_workflow_handshake.py` 为协议基线，覆盖全部 18 个 Python
 工作流和 37 个唯一动作。状态机通过最小变量读写 interface 运行，OPC UA
 只是其中一个 adapter，因此协议测试不需要启动网络服务。
 
 覆盖范围包括 Robot 标准任务 `1/3-25`、S02-S11 物料在位传感器、S04
 磁搅、S05 拍照、S06 加液、S07 扫码/转位/注粉、S08 开关盖、S09 移液，
-以及标准物料转运和单样品物料感知全流程。S07/S09 天平值、S08 瓶盖暂存位、
+以及标准物料转运、单样品物料感知全流程和使用 S0722 交接位的烧杯五工位搬运。
+S07/S09 天平值、S08 瓶盖暂存位、
 S09 TIP 盒/试剂瓶工位和液体余量都会随协议初始化或动作完成更新。
 
 先启动包含 SZLab 节点的 OPC UA Server，再运行：
@@ -262,7 +263,7 @@ start_szlab_handshake.bat opc.tcp://127.0.0.1:4855/xuse_sim/
 
 GUI 的“握手代理”中可将“仿真协议”切换为 `SZLab Poly Studio`。
 切换后会自动选用内置 `data/szlab_plc_0731.csv`，并显示“工作流调试参数”。
-可从 Uni-Lab-SZLab 当前 17 个工作流中
+可从 Uni-Lab-SZLab 当前 18 个工作流中
 选择一个定向调试。代理只解析、初始化和轮询该工作流实际使用的节点；选择
 “全部官方工作流”时同时启用所有协议模块。
 
@@ -280,7 +281,7 @@ python szlab_handshake_agent.py \
 
 | 参数 | 用途 |
 |---|---|
-| `--workflow` | `all` 或 17 个官方工作流 ID 之一；旧 S07/S09 ID 仍作为别名 |
+| `--workflow` | `all` 或 18 个官方工作流 ID 之一；旧 S07/S09 ID 仍作为别名 |
 | `--position` | S04 调试位置，范围 `1-6` |
 | `--pump` | S06 储液瓶，`1`、`2` 或 `3`（双泵） |
 | `--delay-ms` | 统一覆盖无设备时间参数的动作延时；S04 磁搅优先使用本次动作的磁搅时间 |
