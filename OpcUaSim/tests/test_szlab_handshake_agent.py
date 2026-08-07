@@ -602,6 +602,39 @@ def test_s09_add_liquid_handshake_supports_two_complete_sequences() -> None:
     assert simulator.all_cycles_idle() is True
 
 
+def test_s09_republishes_completion_edge_while_request_remains_asserted() -> None:
+    adapter = MemoryAdapter()
+    simulator = handshake.WorkflowHandshakeSimulator(
+        adapter,
+        process_delay=0.5,
+        workflow=handshake.S09_WORKFLOW,
+    )
+    simulator.initialize()
+
+    adapter.write(handshake.S09_PROCESS, 5)
+    adapter.write(handshake.S09_PARAMS_WRITTEN, True)
+    assert [event.phase for event in simulator.step(now=0.0)] == ["accepted"]
+    assert [event.phase for event in simulator.step(now=0.5)] == ["completed"]
+    assert adapter.read(handshake.S09_DONE) == 5
+    assert simulator.completed_actions == 1
+
+    # Edge 若在完成码已经为 5 时才开始等待，会先等待 0，再等待新的 5。
+    # 代理只重发完成边沿，不重复执行或重复记录动作。
+    assert simulator.step(now=1.0) == []
+    assert adapter.read(handshake.S09_DONE) == 0
+    assert simulator.step(now=1.1) == []
+    assert adapter.read(handshake.S09_DONE) == 5
+    assert simulator.completed_actions == 1
+
+    adapter.write(handshake.S09_PROCESS, 0)
+    adapter.write(handshake.S09_PARAMS_WRITTEN, False)
+    reset = simulator.step(now=1.2)
+    assert [event.phase for event in reset] == ["reset"]
+    assert adapter.read(handshake.S09_DONE) == 0
+    assert adapter.read(handshake.S09_ALLOW) is True
+    assert simulator.all_cycles_idle() is True
+
+
 def test_single_sample_workflow_drives_standard_robot_and_new_action_names() -> None:
     adapter = MemoryAdapter()
     simulator = handshake.WorkflowHandshakeSimulator(

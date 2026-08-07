@@ -157,6 +157,13 @@ S08_PROCESS_LABELS = {
 S09_PROCESS = "S09工艺选择"
 S09_PARAMS_WRITTEN = "S09参数写入完成"
 S09_DONE = "S09工艺完成"
+
+# S09 Edge 驱动会把启动等待时已经存在的完成码视为上一轮残留：它先等
+# 完成码回到 0，再等待本轮完成码。PLC-Sim 的动作很快，完成码可能早于
+# Edge 进入等待而产生竞态。保持请求未清零时周期性重发 0 -> 完成码，既
+# 保留完成码锁存语义，也让迟到的 Edge 等待者能观察到一条新的完成边沿。
+S09_COMPLETION_HOLD_SECONDS = 0.5
+S09_COMPLETION_REARM_SECONDS = 0.1
 S09_ALLOW = "S09允许加工"
 S09_STATION_STATUS = "工站状态[8]"
 S09_TIP_BOX = "S09TIP盒工位编号"
@@ -1935,6 +1942,7 @@ class WorkflowHandshakeSimulator:
                 self.adapter.write(S09_BALANCE_READING, self.s09_balance_reading)
             self.adapter.write(S09_DONE, cycle.process)
             cycle.phase = "await_reset"
+            cycle.due_at = now + S09_COMPLETION_HOLD_SECONDS
             events.append(
                 HandshakeEvent(
                     self._s09_action(),
@@ -1947,7 +1955,9 @@ class WorkflowHandshakeSimulator:
             )
         elif cycle.phase == "await_reset":
             # Edge 收到完成码后会把工艺号和参数完成信号一起清零。二者都
-            # 复位才允许新一轮，和当前驱动的 finally 清理顺序保持一致。
+            # 复位才允许新一轮。请求仍保持时周期性重发完成边沿，兼容 Edge
+            # 对启动等待前已存在完成码的防重逻辑；这不会重复执行物理动作，
+            # 也不会重复计入 completed_actions。
             if not params_written and process == 0:
                 self.adapter.write(S09_DONE, 0)
                 self.adapter.write(S09_ALLOW, True)
@@ -1963,6 +1973,14 @@ class WorkflowHandshakeSimulator:
                 )
                 cycle.phase = "idle"
                 cycle.process = 0
+            elif now >= cycle.due_at:
+                done = int(self.adapter.read(S09_DONE) or 0)
+                if done == cycle.process:
+                    self.adapter.write(S09_DONE, 0)
+                    cycle.due_at = now + S09_COMPLETION_REARM_SECONDS
+                else:
+                    self.adapter.write(S09_DONE, cycle.process)
+                    cycle.due_at = now + S09_COMPLETION_HOLD_SECONDS
         return events
 
     def _s09_action(self) -> str:
