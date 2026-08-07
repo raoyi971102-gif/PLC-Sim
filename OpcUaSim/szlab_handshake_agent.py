@@ -275,6 +275,13 @@ S07_MATERIAL_DOSE_ACTION = SUPPORTED_ACTIONS[27]
 SINGLE_SAMPLE_WORKFLOW = "s_z_lab_单样品全流程_物料感知"
 STANDARD_TRANSFER_WORKFLOW = "s_z_lab_标准物料转运"
 BEAKER_TRANSFER_CHAIN_WORKFLOW = "s_z_lab_烧杯五工位搬运"
+BEAKER_TRANSFER_UNWITNESSED_SITE_SENSORS = frozenset(
+    {
+        S072_SENSOR_BY_POSITION[2],
+        S06_BEAKER_SENSOR,
+        S05_MATERIAL_SENSOR,
+    }
+)
 S07_MATERIAL_WORKFLOW = "s07_粉桶与烧杯搬运后固体称量"
 S09_WORKFLOW = "s09_移液调试"
 SINGLE_SAMPLE_S07_DOSE_ACTION = (
@@ -932,11 +939,8 @@ def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec
             (
                 *standard_transfer_requirements,
                 _opc_eq(S03_BEAKER_SENSOR, True, note="S3-L1B1 取料源位必须有烧杯"),
-                _opc_eq(s072_sensor(2), False, note="S0722 必须为空"),
-                _opc_eq(S06_BEAKER_SENSOR, False, note="S061 必须为空"),
                 _opc_eq(S09_STATION_SENSOR[1], False, note="S09 BEAKER1 必须为空"),
                 _opc_eq(s04_sensor(1), False, note="S041 必须为空"),
-                _opc_eq(S05_MATERIAL_SENSOR, False, note="S051 必须为空"),
             ),
         ),
         WorkflowSpec(
@@ -1231,9 +1235,10 @@ class WorkflowHandshakeSimulator:
                     ROBOT_WRITE_ALLOWED: True,
                     ROBOT_WRITE_DONE: False,
                     ROBOT_TASK_COMPLETE: 0,
-                    ROBOT_TOOL_PAYLOAD_SENSOR: False,
                 }
             )
+            if self.workflow != BEAKER_TRANSFER_CHAIN_WORKFLOW:
+                values[ROBOT_TOOL_PAYLOAD_SENSOR] = False
         if "robot_s03" in components:
             values[S03_BEAKER_SENSOR] = True
         if self.workflow == SINGLE_SAMPLE_WORKFLOW:
@@ -1251,11 +1256,8 @@ class WorkflowHandshakeSimulator:
             values.update(
                 {
                     S03_BEAKER_SENSOR: True,
-                    s072_sensor(2): False,
-                    S06_BEAKER_SENSOR: False,
                     S09_STATION_SENSOR[1]: False,
                     s04_sensor(1): False,
-                    S05_MATERIAL_SENSOR: False,
                 }
             )
         if "robot_s04" in components:
@@ -1363,9 +1365,10 @@ class WorkflowHandshakeSimulator:
                     ROBOT_HOME: False,
                     ROBOT_WRITE_ALLOWED: False,
                     ROBOT_TASK_COMPLETE: 0,
-                    ROBOT_TOOL_PAYLOAD_SENSOR: False,
                 }
             )
+            if self.workflow != BEAKER_TRANSFER_CHAIN_WORKFLOW:
+                values[ROBOT_TOOL_PAYLOAD_SENSOR] = False
         if "robot_s03" in components:
             values[S03_BEAKER_SENSOR] = False
         if "robot_s04" in components:
@@ -1445,11 +1448,8 @@ class WorkflowHandshakeSimulator:
             values.update(
                 {
                     S03_BEAKER_SENSOR: False,
-                    s072_sensor(2): False,
-                    S06_BEAKER_SENSOR: False,
                     S09_STATION_SENSOR[1]: False,
                     s04_sensor(1): False,
-                    S05_MATERIAL_SENSOR: False,
                 }
             )
         for name, initial_value in self.initial_value_overrides.items():
@@ -1576,8 +1576,8 @@ class WorkflowHandshakeSimulator:
 
         参数：``now`` 是调用方提供的单调时钟秒值，用于判定模拟动作是否到期。
         返回：本轮接受、完成或复位的握手事件列表；没有状态变化时返回空列表。
-        安全约束：取放料完成时先同步库位与夹爪物理证据，再发布 Robot_Home 和
-        完成码；倒料不会改变夹爪持料状态，避免伪造已放料见证。
+        安全约束：普通取放料先同步启用的物理见证，再发布 Robot_Home 和完成码；
+        五工位搬运不改写 S0722/S05/S06 在位观测及夹爪负载，匹配动作级旁路。
         """
 
         cycle = self.robot
@@ -1611,13 +1611,19 @@ class WorkflowHandshakeSimulator:
             # 任务类型决定动作完成后的库位占用和夹爪持料物理证据。
             task_kind = STANDARD_ROBOT_TASK_KIND.get(cycle.process)
             occupied = task_kind == "place"
-            if cycle.sensor:
+            site_witness_enabled = not (
+                self.workflow == BEAKER_TRANSFER_CHAIN_WORKFLOW
+                and cycle.sensor in BEAKER_TRANSFER_UNWITNESSED_SITE_SENSORS
+            )
+            if cycle.sensor and site_witness_enabled:
                 self.adapter.write(cycle.sensor, occupied)
             tool_holding: bool | None = None
+            tool_witness_enabled = self.workflow != BEAKER_TRANSFER_CHAIN_WORKFLOW
             if task_kind in {"pick", "place"}:
                 tool_holding = task_kind == "pick"
                 # 夹爪传感器仅提供物理执行见证，不替代库存系统的物料结算。
-                self.adapter.write(ROBOT_TOOL_PAYLOAD_SENSOR, tool_holding)
+                if tool_witness_enabled:
+                    self.adapter.write(ROBOT_TOOL_PAYLOAD_SENSOR, tool_holding)
             rearmed_sensor = ""
             if cycle.process == 13:
                 self._s071_loaded_sensor = cycle.sensor
@@ -1637,6 +1643,8 @@ class WorkflowHandshakeSimulator:
                     {
                         "task_number": cycle.process,
                         "occupied": occupied,
+                        "site_witness_enabled": site_witness_enabled,
+                        "tool_witness_enabled": tool_witness_enabled,
                         **(
                             {"tool_holding": tool_holding}
                             if tool_holding is not None

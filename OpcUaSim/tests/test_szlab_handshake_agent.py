@@ -160,14 +160,36 @@ def test_standard_transfer_updates_site_and_tool_payload_witnesses() -> None:
         assert adapter.read(handshake.ROBOT_TOOL_PAYLOAD_SENSOR) is False
 
 
-def test_beaker_transfer_chain_handshake_moves_one_beaker_from_s0722() -> None:
-    """验证五工位握手使用 S0722 交接位逐段更新烧杯在位观测。
+def test_beaker_transfer_chain_skips_selected_site_and_tool_witnesses() -> None:
+    """验证五工位握手旁路 S0722/S05/S06 和全部夹爪负载见证。
 
     参数：无。
-    返回：无；断言五段取放后的源/目标传感器状态。
+    返回：无；断言旁路变量不作为准入条件且在取放期间保持不变。
     """
 
+    spec = next(
+        item
+        for item in handshake.build_workflow_specs()
+        if item.workflow_id == handshake.BEAKER_TRANSFER_CHAIN_WORKFLOW
+    )
+    required_opcua_subjects = {
+        requirement.subject
+        for requirement in spec.requirements
+        if requirement.kind == "opcua"
+    }
+    assert handshake.BEAKER_TRANSFER_UNWITNESSED_SITE_SENSORS.isdisjoint(
+        required_opcua_subjects
+    )
+
     adapter = MemoryAdapter()
+    unmanaged_values = {
+        **{
+            sensor: True
+            for sensor in handshake.BEAKER_TRANSFER_UNWITNESSED_SITE_SENSORS
+        },
+        handshake.ROBOT_TOOL_PAYLOAD_SENSOR: True,
+    }
+    adapter.values.update(unmanaged_values)
     simulator = handshake.WorkflowHandshakeSimulator(
         adapter,
         position=1,
@@ -178,28 +200,27 @@ def test_beaker_transfer_chain_handshake_moves_one_beaker_from_s0722() -> None:
 
     assert adapter.read(handshake.S03_BEAKER_SENSOR) is True
     for sensor in (
-        handshake.s072_sensor(2),
-        handshake.S06_BEAKER_SENSOR,
         handshake.S09_STATION_SENSOR[1],
         handshake.s04_sensor(1),
-        handshake.S05_MATERIAL_SENSOR,
     ):
         assert adapter.read(sensor) is False
+    for name, value in unmanaged_values.items():
+        assert adapter.read(name) is value
 
     clock = 0.0
     steps = (
-        (6, handshake.S03_BEAKER_SENSOR, False),
-        (15, handshake.s072_sensor(2), True),
-        (16, handshake.s072_sensor(2), False),
-        (11, handshake.S06_BEAKER_SENSOR, True),
-        (12, handshake.S06_BEAKER_SENSOR, False),
-        (19, handshake.S09_STATION_SENSOR[1], True),
-        (20, handshake.S09_STATION_SENSOR[1], False),
-        (7, handshake.s04_sensor(1), True),
-        (8, handshake.s04_sensor(1), False),
-        (9, handshake.S05_MATERIAL_SENSOR, True),
+        (6, handshake.S03_BEAKER_SENSOR, False, True),
+        (15, handshake.s072_sensor(2), True, False),
+        (16, handshake.s072_sensor(2), True, False),
+        (11, handshake.S06_BEAKER_SENSOR, True, False),
+        (12, handshake.S06_BEAKER_SENSOR, True, False),
+        (19, handshake.S09_STATION_SENSOR[1], True, True),
+        (20, handshake.S09_STATION_SENSOR[1], False, True),
+        (7, handshake.s04_sensor(1), True, True),
+        (8, handshake.s04_sensor(1), False, True),
+        (9, handshake.S05_MATERIAL_SENSOR, True, False),
     )
-    for task, sensor, occupied in steps:
+    for task, sensor, observed, site_witness_enabled in steps:
         if task in (15, 16):
             adapter.write(handshake.S072_ROBOT_PRODUCT, 2)
         elif task in (19, 20):
@@ -211,19 +232,28 @@ def test_beaker_transfer_chain_handshake_moves_one_beaker_from_s0722() -> None:
         adapter.write(handshake.ROBOT_TASK_NUMBER, task)
         adapter.write(handshake.ROBOT_WRITE_DONE, True)
         simulator.step(now=clock)
-        simulator.step(now=clock + 0.5)
-        assert adapter.read(sensor) is occupied
+        completion_events = simulator.step(now=clock + 0.5)
+        assert adapter.read(sensor) is observed
+        assert adapter.read(handshake.ROBOT_TOOL_PAYLOAD_SENSOR) is True
+        assert (
+            completion_events[-1].detail["site_witness_enabled"]
+            is site_witness_enabled
+        )
+        assert completion_events[-1].detail["tool_witness_enabled"] is False
 
         adapter.write(handshake.ROBOT_WRITE_DONE, False)
         simulator.step(now=clock + 0.6)
         clock += 1.0
 
     assert adapter.read(handshake.S03_BEAKER_SENSOR) is False
-    assert adapter.read(handshake.s072_sensor(2)) is False
-    assert adapter.read(handshake.S06_BEAKER_SENSOR) is False
+    assert adapter.read(handshake.s072_sensor(2)) is True
+    assert adapter.read(handshake.S06_BEAKER_SENSOR) is True
     assert adapter.read(handshake.S09_STATION_SENSOR[1]) is False
     assert adapter.read(handshake.s04_sensor(1)) is False
     assert adapter.read(handshake.S05_MATERIAL_SENSOR) is True
+    cleanup = simulator.cleanup_values()
+    assert handshake.BEAKER_TRANSFER_UNWITNESSED_SITE_SENSORS.isdisjoint(cleanup)
+    assert handshake.ROBOT_TOOL_PAYLOAD_SENSOR not in cleanup
     assert simulator.completed_actions == len(steps)
 
 
