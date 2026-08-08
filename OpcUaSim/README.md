@@ -17,11 +17,29 @@
 从 [GitHub Releases](https://github.com/raoyi971102-gif/PLC-Sim/releases) 下载与系统匹配的安装包：
 
 - Windows 10/11 x64：`OpcUaSim-Setup-Windows-x64-*.exe`；
+- Debian/Ubuntu 22.04+ x64：`OpcUaSim-Linux-x64-*.deb`；
+- 其他 glibc 2.35+ Linux x64：`OpcUaSim-Linux-x64-*.tar.gz`；
 - Apple Silicon Mac（M 系列芯片）：`OpcUaSim-macOS-arm64-*.dmg`；
 - Intel Mac：`OpcUaSim-macOS-x64-*.dmg`。
 
-Windows 安装后可从开始菜单启动。macOS 打开 DMG 后把 `OpcUaSim.app` 拖入
-“Applications”目录即可。应用会自动打开 Web GUI，不需要另外安装 Python 或依赖。
+Windows 安装后可从开始菜单启动。Debian/Ubuntu 安装 DEB 后可从应用菜单启动，
+也可运行 `opcua-sim`；其他 Linux 解压便携包后运行目录中的 `OpcUaSim`。
+macOS 打开 DMG 后把 `OpcUaSim.app` 拖入“Applications”目录即可。应用会自动
+打开 Web GUI，不需要另外安装 Python 或依赖。
+
+Linux DEB 安装示例：
+
+```bash
+sudo apt install ./OpcUaSim-Linux-x64-v*.deb
+opcua-sim
+```
+
+Linux 便携包示例：
+
+```bash
+tar -xzf OpcUaSim-Linux-x64-v*.tar.gz
+./OpcUaSim-Linux-x64-v*/OpcUaSim
+```
 
 当前安装包没有商业代码签名证书。Windows 可能显示 SmartScreen 提示；macOS
 使用临时签名但尚未经过 Apple 公证，首次启动请按住 Control 点击应用，选择“打开”。

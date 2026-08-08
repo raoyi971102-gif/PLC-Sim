@@ -116,6 +116,54 @@ jobs:
           path: OpcUaSim/artifacts/*.exe
           if-no-files-found: error
 
+  linux:
+    needs: test
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: OpcUaSim
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: OpcUaSim
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - name: 安装构建依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -c packaging/constraints.txt . pyinstaller
+      - name: 冻结 Linux x64 应用
+        run: >-
+          pyinstaller packaging/frozen_entry.py
+          --name OpcUaSim
+          --onedir
+          --clean
+          --noconfirm
+          --collect-all opcua_sim
+          --copy-metadata unilab-opcua-sim
+      - name: 冒烟测试冻结应用与 Server 子进程
+        run: python packaging/smoke_frozen.py dist/OpcUaSim/OpcUaSim
+      - name: 生成 Linux DEB 与便携包
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#opcua-sim-v}"
+          bash packaging/build_linux_packages.sh "$version" x64
+      - name: 校验 Linux 安装包
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#opcua-sim-v}"
+          python packaging/verify_artifact.py linux "artifacts/OpcUaSim-Linux-x64-v${version}.deb" --version "$version" --kind deb
+          python packaging/verify_artifact.py linux "artifacts/OpcUaSim-Linux-x64-v${version}.tar.gz" --version "$version" --kind archive
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpcUaSim-Linux-x64
+          path: |
+            OpcUaSim/artifacts/*.deb
+            OpcUaSim/artifacts/*.tar.gz
+          if-no-files-found: error
+
   macos:
     needs: test
     strategy:
@@ -170,7 +218,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [python-package, windows, macos]
+    needs: [python-package, windows, linux, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -187,6 +235,8 @@ jobs:
           OpcUaSim 原生安装包，无需预装 Python。
 
           - Windows x64：运行 `OpcUaSim-Setup-Windows-x64-*.exe`
+          - Debian/Ubuntu x64：安装 `OpcUaSim-Linux-x64-*.deb`
+          - 其他 Linux x64：解压 `OpcUaSim-Linux-x64-*.tar.gz` 后运行 `OpcUaSim`
           - Apple Silicon Mac：下载 `OpcUaSim-macOS-arm64-*.dmg`
           - Intel Mac：下载 `OpcUaSim-macOS-x64-*.dmg`
           - Python 3.11：下载 wheel 后执行 `pip install unilab_opcua_sim-*.whl`

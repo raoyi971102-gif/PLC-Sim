@@ -58,8 +58,14 @@ def test_cli_help_lists_all_installed_commands(capsys):
 
 
 def test_cli_reports_package_version(capsys):
+    """验证统一 CLI 输出当前 OpcUaSim 包版本。
+
+    参数：``capsys`` 是 pytest 的标准输出捕获器。
+    返回：无；断言版本参数成功且输出与发布元数据一致。
+    """
+
     assert package_cli.main(["--version"]) == 0
-    assert capsys.readouterr().out.strip() == "0.2.5"
+    assert capsys.readouterr().out.strip() == "0.2.6"
 
 
 def test_runtime_command_uses_python_script_in_source_mode(monkeypatch):

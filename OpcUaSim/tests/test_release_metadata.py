@@ -3,10 +3,8 @@ from __future__ import annotations
 import ast
 import subprocess
 import sys
-from pathlib import Path
-
 import tomllib
-
+from pathlib import Path
 
 PROJECT_DIRECTORY = Path(__file__).parents[1]
 REPOSITORY_DIRECTORY = PROJECT_DIRECTORY.parent
@@ -71,7 +69,32 @@ def test_ci_uses_only_python_311() -> None:
     assert "python-version: '3.10'" not in deploy_workflow
 
 
+def test_release_builds_and_publishes_linux_installers() -> None:
+    """验证原生 Release 包含 Linux x64 构建、校验和发布依赖。
+
+    参数：无；读取仓库中的安装包工作流。
+    返回：无；断言 DEB、便携包及 Release 汇总任务均已声明。
+    """
+
+    installer_workflow = (
+        REPOSITORY_DIRECTORY / ".github" / "workflows" / "installers.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "  linux:\n" in installer_workflow
+    assert "runs-on: ubuntu-22.04" in installer_workflow
+    assert "packaging/build_linux_packages.sh" in installer_workflow
+    assert "OpcUaSim-Linux-x64-v${version}.deb" in installer_workflow
+    assert "OpcUaSim-Linux-x64-v${version}.tar.gz" in installer_workflow
+    assert "needs: [python-package, windows, linux, macos]" in installer_workflow
+
+
 def test_project_version_reader_matches_package_metadata() -> None:
+    """验证 Release 标签校验脚本读取当前 Python 包版本。
+
+    参数：无；调用仓库中的版本读取脚本。
+    返回：无；断言脚本输出与 0.2.6 发布版本一致。
+    """
+
     result = subprocess.run(
         [
             sys.executable,
@@ -83,7 +106,7 @@ def test_project_version_reader_matches_package_metadata() -> None:
         text=True,
     )
 
-    assert result.stdout.strip() == "0.2.5"
+    assert result.stdout.strip() == "0.2.6"
 
 
 def test_one_click_requirements_use_native_release_constraints() -> None:
