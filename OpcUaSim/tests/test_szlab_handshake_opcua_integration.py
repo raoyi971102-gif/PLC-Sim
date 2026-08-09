@@ -8,15 +8,25 @@ from opcua import ua
 from common import NodeDef
 from server import add_nodes, build_server, register_ns_padding
 from szlab_handshake_agent import (
+    ATTACHMENT_SINGLE_SAMPLE_WORKFLOW,
     ROBOT_TASK_NUMBER,
     ROBOT_TOOL_PAYLOAD_SENSOR,
     ROBOT_WRITE_DONE,
     S04_ROBOT_POSITION,
+    S06_PARAMS_WRITTEN,
+    S06_PROCESS,
+    S07_PARAMS_WRITTEN,
+    S07_PROCESS,
+    S08_CAP_STORAGE_SLOT,
+    S08_PARAMS_WRITTEN,
+    S08_PROCESS,
     S09_PARAMS_WRITTEN,
     S09_PROCESS,
     S09_WORKFLOW,
     OpcUaVariableAdapter,
     WorkflowHandshakeSimulator,
+    s04_params_written,
+    s04_process,
     s04_sensor,
 )
 
@@ -154,6 +164,71 @@ def test_latest_s09_cycle_requires_official_parameter_reset() -> None:
         ]
         assert nodes["S09工艺完成"].get_value() == 0
         assert nodes["S09允许加工"].get_value() is True
+    finally:
+        adapter.disconnect()
+        server.stop()
+
+
+def test_attachment_flow_skips_scan_on_a_real_opcua_s07_cycle() -> None:
+    """验证附件流程经真实 OPC UA adapter 直接执行 S07 工艺 2、3。
+
+    参数：无。
+    返回：无；断言不请求工艺 1，也不会产生粉桶扫码动作事件。
+    """
+
+    seed = {
+        ROBOT_TASK_NUMBER: 0,
+        S04_ROBOT_POSITION: 0,
+        s04_process(1): 0,
+        s04_params_written(1): False,
+        S06_PROCESS: 0,
+        S06_PARAMS_WRITTEN: False,
+        S07_PROCESS: 0,
+        S07_PARAMS_WRITTEN: False,
+        S08_PROCESS: 0,
+        S08_PARAMS_WRITTEN: False,
+        S08_CAP_STORAGE_SLOT: 0,
+        S09_PROCESS: 0,
+        S09_PARAMS_WRITTEN: False,
+    }
+    blueprint = WorkflowHandshakeSimulator(
+        _MemoryAdapter(seed),
+        workflow=ATTACHMENT_SINGLE_SAMPLE_WORKFLOW,
+        process_delay=0.0,
+    )
+    values = {**blueprint.initialization_values(), **seed}
+    server, nodes, endpoint = _start_server(values)
+    adapter = OpcUaVariableAdapter(endpoint, "ns=4;s=上位机通讯|")
+    simulator = WorkflowHandshakeSimulator(
+        adapter,
+        workflow=ATTACHMENT_SINGLE_SAMPLE_WORKFLOW,
+        process_delay=0.0,
+    )
+    try:
+        adapter.connect()
+        simulator.initialize()
+        observed_actions: list[str] = []
+        clock = 3.0
+        for process in (2, 3):
+            nodes[S07_PROCESS].set_value(ua.Variant(process, ua.VariantType.Int32))
+            nodes[S07_PARAMS_WRITTEN].set_value(
+                ua.Variant(True, ua.VariantType.Boolean)
+            )
+            events = simulator.step(now=clock) + simulator.step(now=clock)
+            observed_actions.extend(event.action for event in events)
+            assert [event.phase for event in events] == ["accepted", "completed"]
+            assert nodes["S07工艺完成"].get_value() == process
+
+            nodes[S07_PROCESS].set_value(ua.Variant(0, ua.VariantType.Int32))
+            nodes[S07_PARAMS_WRITTEN].set_value(
+                ua.Variant(False, ua.VariantType.Boolean)
+            )
+            assert [event.phase for event in simulator.step(now=clock + 0.01)] == [
+                "reset"
+            ]
+            clock += 1.0
+
+        assert "szlab_s07_solid_addition.scan_powder_cartridges" not in observed_actions
     finally:
         adapter.disconnect()
         server.stop()

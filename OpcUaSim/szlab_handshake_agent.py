@@ -8,7 +8,7 @@
 3. ``serve``：写入测试先决条件，并监听 PC→PLC 信号，模拟 PLC 握手。
 
 协议目录与 Uni-Lab-SZLab 当前工作流源码对齐，覆盖 ``workflows`` 目录中全部
-18 个 Python 工作流、37 个唯一动作调用。状态机只依赖 :class:`VariableAdapter`
+19 个 Python 工作流、37 个唯一动作调用。状态机只依赖 :class:`VariableAdapter`
 这一处 interface；OPC UA、内存测试替身等实现都作为 adapter 接入。
 握手场景名称使用工作流源码中的真实函数名；旧版 S07/S09 场景名仍作为兼容别名：
 
@@ -273,6 +273,10 @@ S07_MATERIAL_ROBOT_PLACE_ACTION = SUPPORTED_ACTIONS[25]
 S07_MATERIAL_COMMIT_ACTION = SUPPORTED_ACTIONS[26]
 S07_MATERIAL_DOSE_ACTION = SUPPORTED_ACTIONS[27]
 SINGLE_SAMPLE_WORKFLOW = "s_z_lab_单样品全流程_物料感知"
+ATTACHMENT_SINGLE_SAMPLE_WORKFLOW = "s_z_lab_单样品原子流程_无_s07_扫码"
+SINGLE_SAMPLE_WORKFLOWS = frozenset(
+    {SINGLE_SAMPLE_WORKFLOW, ATTACHMENT_SINGLE_SAMPLE_WORKFLOW}
+)
 STANDARD_TRANSFER_WORKFLOW = "s_z_lab_标准物料转运"
 BEAKER_TRANSFER_CHAIN_WORKFLOW = "s_z_lab_烧杯五工位搬运"
 BEAKER_TRANSFER_UNWITNESSED_SITE_SENSORS = frozenset(
@@ -317,6 +321,7 @@ WORKFLOW_IDS = (
     S07_MATERIAL_WORKFLOW,
     STANDARD_TRANSFER_WORKFLOW,
     SINGLE_SAMPLE_WORKFLOW,
+    ATTACHMENT_SINGLE_SAMPLE_WORKFLOW,
     BEAKER_TRANSFER_CHAIN_WORKFLOW,
 )
 
@@ -346,6 +351,9 @@ WORKFLOW_COMPONENTS = {
     STANDARD_TRANSFER_WORKFLOW: frozenset({"robot_standard"}),
     BEAKER_TRANSFER_CHAIN_WORKFLOW: frozenset({"robot_standard"}),
     SINGLE_SAMPLE_WORKFLOW: frozenset(
+        {"robot_standard", "pump", "stirrer", "photo", "s07", "s08", "s09"}
+    ),
+    ATTACHMENT_SINGLE_SAMPLE_WORKFLOW: frozenset(
         {"robot_standard", "pump", "stirrer", "photo", "s07", "s08", "s09"}
     ),
 }
@@ -601,7 +609,7 @@ def _robot_common() -> tuple[Requirement, ...]:
 
 
 def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec, ...]:
-    """返回仓库当前 18 个 Python 工作流的先决条件目录。
+    """返回仓库当前 19 个 Python 工作流的先决条件目录。
 
     参数：``position`` 是 S04 调试库位编号；``pump`` 是 S06 储液泵选择。
     返回：工作流（Workflow）标识、动作及 PLC 先决条件的不可变目录。
@@ -637,6 +645,30 @@ def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec
             "runtime",
             "workflow_execution_identity",
             "OS 必须为每个 robot.pick/place Action 注入有效 WorkflowNodeJob UUID",
+        ),
+    )
+    single_sample_requirements = (
+        *standard_transfer_requirements,
+        _opc_eq(S06_READY, True),
+        _opc_eq(S06_ALLOW, True),
+        _opc_eq(S07_HOME, True),
+        _opc_eq(S07_ALLOW, True),
+        _opc_eq(S08_HOME, True),
+        _opc_eq(S08_ALLOW, True),
+        _opc_eq(S09_ALLOW, True),
+        _opc_eq(S03_BEAKER_SENSOR, True, note="固定示例烧杯源位 L1B1"),
+        _opc_eq(S03_SAMPLE_VIAL_SENSOR, True, note="固定示例 250 mL 样品瓶源位 L1A1"),
+        _opc_eq(s071_sensor(1), True, note="固定示例粗粉桶源位 L1C1"),
+        _opc_eq(s071_sensor(2), True, note="固定示例精粉桶源位 L1C2"),
+        _opc_eq(s10_sensor(1), True, note="固定示例试剂瓶源位 R1C1"),
+        _opc_eq(S09_TIP_BOX_SENSOR[1], True, note="移液前 TIP 盒 1 必须在位"),
+        _opc_eq(S09_BALANCE_STABLE, True),
+        _opc_readable(S09_BALANCE_READING),
+        _opc_readable(S07_BALANCE_READING),
+        _manual(
+            "config",
+            "s08_s09_site_witnesses",
+            "S08 双向瓶位、S09 试剂瓶位与 250 mL 负载必须完成现场验收",
         ),
     )
     return (
@@ -961,32 +993,26 @@ def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec
                 "szlab_mixer_robot.pick_beaker",
                 "szlab_mixer_robot.pour_beaker_into_vial",
             ),
+            single_sample_requirements,
+        ),
+        WorkflowSpec(
+            ATTACHMENT_SINGLE_SAMPLE_WORKFLOW,
             (
-                *standard_transfer_requirements,
-                _opc_eq(S06_READY, True),
-                _opc_eq(S06_ALLOW, True),
-                _opc_eq(S07_HOME, True),
-                _opc_eq(S07_ALLOW, True),
-                _opc_eq(S08_HOME, True),
-                _opc_eq(S08_ALLOW, True),
-                _opc_eq(S09_ALLOW, True),
-                _opc_eq(S03_BEAKER_SENSOR, True, note="固定示例烧杯源位 L1B1"),
-                _opc_eq(
-                    S03_SAMPLE_VIAL_SENSOR, True, note="固定示例 250 mL 样品瓶源位 L1A1"
-                ),
-                _opc_eq(s071_sensor(1), True, note="固定示例粗粉桶源位 L1C1"),
-                _opc_eq(s071_sensor(2), True, note="固定示例精粉桶源位 L1C2"),
-                _opc_eq(s10_sensor(1), True, note="固定示例试剂瓶源位 R1C1"),
-                _opc_eq(S09_TIP_BOX_SENSOR[1], True, note="移液前 TIP 盒 1 必须在位"),
-                _opc_eq(S09_BALANCE_STABLE, True),
-                _opc_readable(S09_BALANCE_READING),
-                _opc_readable(S07_BALANCE_READING),
-                _manual(
-                    "config",
-                    "s08_s09_site_witnesses",
-                    "S08 双向瓶位、S09 试剂瓶位与 250 mL 负载必须完成现场验收",
-                ),
+                "szlab_mixer_robot.pick",
+                "szlab_mixer_robot.place",
+                "host_node.transfer_resource",
+                "szlab_s08_cap_station.process_liquid_reagent_100ml_cap_with_material",
+                "szlab_s07_solid_addition.prepare_powder_cartridge_site",
+                "szlab_s07_solid_addition.dose_powder_with_two_materials",
+                "szlab_mixer_pump.add_solvent_with_materials",
+                "szlab_mixer_pipetting_station.add_liquid_with_materials",
+                "szlab_mixer_stirrer.stir_beaker",
+                "szlab_s08_cap_station.process_sample_vial_250ml_cap_with_material",
+                "szlab_mixer_photoshotting.inspect_beaker",
+                "szlab_mixer_robot.pick_beaker",
+                "szlab_mixer_robot.pour_beaker_into_vial",
             ),
+            single_sample_requirements,
         ),
     )
 
@@ -1191,12 +1217,13 @@ class WorkflowHandshakeSimulator:
                 "s06_robot_workflow",
                 "szlab_material_s06_workflow",
                 "szlab_robot_liquid_stirring_demo_workflow",
-                SINGLE_SAMPLE_WORKFLOW,
             }
+            or selected_workflow in SINGLE_SAMPLE_WORKFLOWS
         )
         self.s09_pipetting_workflow = bool(
             s09_pipetting_workflow
-            or selected_workflow in {S09_WORKFLOW, SINGLE_SAMPLE_WORKFLOW}
+            or selected_workflow == S09_WORKFLOW
+            or selected_workflow in SINGLE_SAMPLE_WORKFLOWS
         )
         self.s09_remaining_volume_ml = float(s09_remaining_volume_ml)
         self.s07_balance_reading = float(s07_balance_reading)
@@ -1241,7 +1268,7 @@ class WorkflowHandshakeSimulator:
                 values[ROBOT_TOOL_PAYLOAD_SENSOR] = False
         if "robot_s03" in components:
             values[S03_BEAKER_SENSOR] = True
-        if self.workflow == SINGLE_SAMPLE_WORKFLOW:
+        if self.workflow in SINGLE_SAMPLE_WORKFLOWS:
             values.update(
                 {
                     S03_BEAKER_SENSOR: True,
@@ -1267,7 +1294,7 @@ class WorkflowHandshakeSimulator:
                 {
                     s04_sensor(self.position): not (
                         "robot_s04" in components
-                        or self.workflow == SINGLE_SAMPLE_WORKFLOW
+                        or self.workflow in SINGLE_SAMPLE_WORKFLOWS
                     ),
                     s04_allow(self.position): True,
                     s04_status(self.position): 1,
@@ -1277,7 +1304,7 @@ class WorkflowHandshakeSimulator:
         if "photo" in components:
             values.update(
                 {
-                    S05_MATERIAL_SENSOR: self.workflow != SINGLE_SAMPLE_WORKFLOW,
+                    S05_MATERIAL_SENSOR: self.workflow not in SINGLE_SAMPLE_WORKFLOWS,
                     S05_DONE: True,
                     S05_RESULT: 1,
                 }
@@ -1313,7 +1340,7 @@ class WorkflowHandshakeSimulator:
             )
         if "s08" in components:
             station_values = {
-                sensor: self.workflow != SINGLE_SAMPLE_WORKFLOW and position == 2
+                sensor: self.workflow not in SINGLE_SAMPLE_WORKFLOWS and position == 2
                 for position, sensor in S08_CAP_STATION_SENSOR.items()
             }
             values.update(
@@ -1328,7 +1355,7 @@ class WorkflowHandshakeSimulator:
                 }
             )
         if "s09" in components:
-            station_present = self.workflow != SINGLE_SAMPLE_WORKFLOW
+            station_present = self.workflow not in SINGLE_SAMPLE_WORKFLOWS
             values.update(
                 {
                     S09_STATION_STATUS: 2,
@@ -1525,10 +1552,9 @@ class WorkflowHandshakeSimulator:
             position = int(self.adapter.read(S02_ROBOT_POSITION) or 0)
             return position, s02_sensor(position)
         if task in (5, 6):
-            if task == 6 and self.workflow not in {
-                STANDARD_TRANSFER_WORKFLOW,
-                SINGLE_SAMPLE_WORKFLOW,
-            }:
+            if task == 6 and self.workflow not in (
+                {STANDARD_TRANSFER_WORKFLOW} | SINGLE_SAMPLE_WORKFLOWS
+            ):
                 return 1, S03_BEAKER_SENSOR
             product_type = int(self.adapter.read(S03_ROBOT_PRODUCT) or 0)
             position = int(self.adapter.read(S03_ROBOT_POSITION) or 0)
@@ -1692,9 +1718,9 @@ class WorkflowHandshakeSimulator:
         if self.workflow == "all" and task in ROBOT_ACTION_BY_TASK:
             return ROBOT_ACTION_BY_TASK[task]
         if "robot_standard" in self.enabled_components:
-            if self.workflow == SINGLE_SAMPLE_WORKFLOW and task == 10:
+            if self.workflow in SINGLE_SAMPLE_WORKFLOWS and task == 10:
                 return SINGLE_SAMPLE_ROBOT_PICK_ACTION
-            if self.workflow == SINGLE_SAMPLE_WORKFLOW and task == 25:
+            if self.workflow in SINGLE_SAMPLE_WORKFLOWS and task == 25:
                 return SINGLE_SAMPLE_ROBOT_POUR_ACTION
             kind = STANDARD_ROBOT_TASK_KIND[task]
             if kind in {"pick", "place"}:
@@ -1763,7 +1789,7 @@ class WorkflowHandshakeSimulator:
         return events
 
     def _stirrer_action(self) -> str:
-        if self.workflow == SINGLE_SAMPLE_WORKFLOW:
+        if self.workflow in SINGLE_SAMPLE_WORKFLOWS:
             return SINGLE_SAMPLE_STIR_ACTION
         return S04_STIR_ACTION
 
@@ -1822,7 +1848,7 @@ class WorkflowHandshakeSimulator:
     def _pump_action(self) -> str:
         if self.workflow == "szlab_material_s06_workflow":
             return MATERIAL_S06_ADD_ACTION
-        if self.workflow == SINGLE_SAMPLE_WORKFLOW:
+        if self.workflow in SINGLE_SAMPLE_WORKFLOWS:
             return SINGLE_SAMPLE_PUMP_ACTION
         return S06_PUMP_ACTION
 
@@ -1891,7 +1917,9 @@ class WorkflowHandshakeSimulator:
                 return S07_MATERIAL_PREPARE_ACTION
             if process == 3:
                 return S07_MATERIAL_DOSE_ACTION
-        if self.workflow == SINGLE_SAMPLE_WORKFLOW and process == 3:
+        if self.workflow == ATTACHMENT_SINGLE_SAMPLE_WORKFLOW and process == 2:
+            return S07_MATERIAL_PREPARE_ACTION
+        if self.workflow in SINGLE_SAMPLE_WORKFLOWS and process == 3:
             return SINGLE_SAMPLE_S07_DOSE_ACTION
         return S07_SOLID_ACTION_BY_PROCESS[process]
 
@@ -1964,7 +1992,7 @@ class WorkflowHandshakeSimulator:
         return events
 
     def _s08_action(self, process: int) -> str:
-        if self.workflow == SINGLE_SAMPLE_WORKFLOW:
+        if self.workflow in SINGLE_SAMPLE_WORKFLOWS:
             if process in {5, 6}:
                 return SINGLE_SAMPLE_S08_LIQUID_CAP_ACTION
             if process in {3, 4}:
@@ -2048,7 +2076,7 @@ class WorkflowHandshakeSimulator:
         return events
 
     def _s09_action(self) -> str:
-        if self.workflow == SINGLE_SAMPLE_WORKFLOW:
+        if self.workflow in SINGLE_SAMPLE_WORKFLOWS:
             return SINGLE_SAMPLE_S09_ACTION
         return S09_ADD_LIQUID_ACTION
 

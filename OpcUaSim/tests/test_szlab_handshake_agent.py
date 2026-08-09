@@ -33,7 +33,7 @@ class MemoryAdapter:
 
 
 def test_catalog_matches_official_workflow_snapshot() -> None:
-    """验证 PLC-Sim 目录与当前 18 个 SZLab 工作流快照一致。
+    """验证 PLC-Sim 目录与当前 19 个 SZLab 工作流快照一致。
 
     参数：无。
     返回：无；断言工作流（Workflow）标识和动作目录。
@@ -41,7 +41,7 @@ def test_catalog_matches_official_workflow_snapshot() -> None:
 
     specs = handshake.build_workflow_specs()
 
-    assert len(specs) == 18
+    assert len(specs) == 19
     assert len(handshake.SUPPORTED_ACTIONS) == 37
     assert {item.workflow_id for item in specs} == {
         "szlab_magnetic_stirring_workflow",
@@ -61,6 +61,7 @@ def test_catalog_matches_official_workflow_snapshot() -> None:
         "s07_粉桶与烧杯搬运后固体称量",
         "s_z_lab_标准物料转运",
         "s_z_lab_单样品全流程_物料感知",
+        "s_z_lab_单样品原子流程_无_s07_扫码",
         "s_z_lab_烧杯五工位搬运",
     }
 

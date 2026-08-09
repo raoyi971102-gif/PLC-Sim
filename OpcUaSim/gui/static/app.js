@@ -522,6 +522,7 @@ const SZLAB_S04_WORKFLOWS = new Set([
   "s04_robot_stirring_workflow",
   "szlab_robot_liquid_stirring_demo_workflow",
   "s_z_lab_单样品全流程_物料感知",
+  "s_z_lab_单样品原子流程_无_s07_扫码",
 ]);
 const SZLAB_PUMP_WORKFLOWS = new Set([
   "all",
@@ -532,17 +533,20 @@ const SZLAB_PUMP_WORKFLOWS = new Set([
   "szlab_material_s06_workflow",
   "szlab_robot_liquid_stirring_demo_workflow",
   "s_z_lab_单样品全流程_物料感知",
+  "s_z_lab_单样品原子流程_无_s07_扫码",
 ]);
 const SZLAB_S07_WORKFLOWS = new Set([
   "all",
   "szlab_s07_solid_addition_workflow",
   "s07_粉桶与烧杯搬运后固体称量",
   "s_z_lab_单样品全流程_物料感知",
+  "s_z_lab_单样品原子流程_无_s07_扫码",
 ]);
 const SZLAB_S09_WORKFLOWS = new Set([
   "all",
   "s09_移液调试",
   "s_z_lab_单样品全流程_物料感知",
+  "s_z_lab_单样品原子流程_无_s07_扫码",
 ]);
 
 function syncSzlabAgentOptions() {
