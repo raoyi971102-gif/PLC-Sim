@@ -11,7 +11,4 @@ python -m pytest
 
 ```bash
 python tests/integration/remote_attach_check.py
-python tests/integration/xuse_handshake_check.py
 ```
-
-其中 `xuse_handshake_check.py` 需要先启动 Server 和 XUSE Handshake Agent。

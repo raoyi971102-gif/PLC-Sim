@@ -33,7 +33,7 @@ class MemoryAdapter:
 
 
 def test_attachment_flow_has_an_independent_scan_free_handshake_catalog() -> None:
-    """证明附件流程具有独立且无 S07 扫码的握手目录。
+    """证明附件流程具有独立且无 S07 扫码/粉桶上机的握手目录。
 
     参数：无。
     返回：无；断言动作按新内核源码首次出现顺序登记，旧流程保持可用。
@@ -51,7 +51,6 @@ def test_attachment_flow_has_an_independent_scan_free_handshake_catalog() -> Non
         "szlab_mixer_robot.place",
         "host_node.transfer_resource",
         "szlab_s08_cap_station.process_liquid_reagent_100ml_cap_with_material",
-        "szlab_s07_solid_addition.prepare_powder_cartridge_site",
         "szlab_s07_solid_addition.dose_powder_with_two_materials",
         "szlab_mixer_pump.add_solvent_with_materials",
         "szlab_mixer_pipetting_station.add_liquid_with_materials",
@@ -62,13 +61,14 @@ def test_attachment_flow_has_an_independent_scan_free_handshake_catalog() -> Non
         "szlab_mixer_robot.pour_beaker_into_vial",
     )
     assert "szlab_s07_solid_addition.scan_powder_cartridges" not in attachment.actions
+    assert "szlab_s07_solid_addition.prepare_powder_cartridge_site" not in attachment.actions
 
 
-def test_attachment_flow_completes_s07_prepare_and_dose_without_scan_cycle() -> None:
-    """证明新流程可跳过工艺 1，直接完成 S07 准备与加粉握手。
+def test_attachment_flow_completes_s07_dose_without_prepare_or_scan() -> None:
+    """证明新流程可直接完成 S07 双粉桶注粉握手，不再走转盘准备工艺。
 
     参数：无。
-    返回：无；依次验证工艺 2、3 的 accepted/completed/reset 边沿和动作身份。
+    返回：无；验证工艺 3 的 accepted/completed/reset 边沿和动作身份。
     """
 
     adapter = MemoryAdapter()
@@ -79,32 +79,25 @@ def test_attachment_flow_completes_s07_prepare_and_dose_without_scan_cycle() -> 
     )
     simulator.initialize()
 
-    expected_actions = {
-        2: handshake.S07_MATERIAL_PREPARE_ACTION,
-        3: handshake.SINGLE_SAMPLE_S07_DOSE_ACTION,
-    }
-    clock = 0.0
-    for process in (2, 3):
-        adapter.write(handshake.S07_PROCESS, process)
-        adapter.write(handshake.S07_PARAMS_WRITTEN, True)
-        accepted = simulator.step(now=clock)
-        completed = simulator.step(now=clock + 0.5)
+    adapter.write(handshake.S07_PROCESS, 3)
+    adapter.write(handshake.S07_PARAMS_WRITTEN, True)
+    accepted = simulator.step(now=0.0)
+    completed = simulator.step(now=0.5)
 
-        assert [(event.action, event.phase) for event in accepted] == [
-            (expected_actions[process], "accepted")
-        ]
-        assert [(event.action, event.phase) for event in completed] == [
-            (expected_actions[process], "completed")
-        ]
-        assert adapter.read(handshake.S07_DONE) == process
+    assert [(event.action, event.phase) for event in accepted] == [
+        (handshake.SINGLE_SAMPLE_S07_DOSE_ACTION, "accepted")
+    ]
+    assert [(event.action, event.phase) for event in completed] == [
+        (handshake.SINGLE_SAMPLE_S07_DOSE_ACTION, "completed")
+    ]
+    assert adapter.read(handshake.S07_DONE) == 3
 
-        adapter.write(handshake.S07_PROCESS, 0)
-        adapter.write(handshake.S07_PARAMS_WRITTEN, False)
-        reset = simulator.step(now=clock + 0.6)
-        assert [(event.action, event.phase) for event in reset] == [
-            (expected_actions[process], "reset")
-        ]
-        clock += 1.0
+    adapter.write(handshake.S07_PROCESS, 0)
+    adapter.write(handshake.S07_PARAMS_WRITTEN, False)
+    reset = simulator.step(now=0.6)
+    assert [(event.action, event.phase) for event in reset] == [
+        (handshake.SINGLE_SAMPLE_S07_DOSE_ACTION, "reset")
+    ]
 
-    assert simulator.completed_actions == 2
+    assert simulator.completed_actions == 1
     assert simulator.all_cycles_idle() is True

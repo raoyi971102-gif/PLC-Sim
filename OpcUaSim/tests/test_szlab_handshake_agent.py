@@ -41,7 +41,7 @@ def test_catalog_matches_official_workflow_snapshot() -> None:
 
     specs = handshake.build_workflow_specs()
 
-    assert len(specs) == 19
+    assert len(specs) == 18
     assert len(handshake.SUPPORTED_ACTIONS) == 37
     assert {item.workflow_id for item in specs} == {
         "szlab_magnetic_stirring_workflow",
@@ -57,7 +57,6 @@ def test_catalog_matches_official_workflow_snapshot() -> None:
         "szlab_mixer_workflow",
         "szlab_mixer_pump_production",
         "szlab_material_s06_workflow",
-        "szlab_robot_liquid_stirring_demo_workflow",
         "s07_粉桶与烧杯搬运后固体称量",
         "s_z_lab_标准物料转运",
         "s_z_lab_单样品全流程_物料感知",
@@ -258,31 +257,15 @@ def test_beaker_transfer_chain_skips_selected_site_and_tool_witnesses() -> None:
     assert simulator.completed_actions == len(steps)
 
 
-def test_robot_liquid_stirring_demo_has_five_actions_and_empty_stations() -> None:
-    specs = handshake.build_workflow_specs()
-    demo = next(
-        item
-        for item in specs
-        if item.workflow_id == "szlab_robot_liquid_stirring_demo_workflow"
-    )
-
-    assert demo.actions == (
-        "szlab_mixer_robot.submit_place_to_s06",
-        "szlab_mixer_pump.run_solvent_addition",
-        "szlab_mixer_robot.submit_pick_from_s06",
-        "szlab_mixer_robot.submit_place_to_s04",
-        "szlab_mixer_stirrer.run_stirring",
-    )
-
+def test_s06_robot_workflow_starts_with_empty_beaker_station() -> None:
     adapter = MemoryAdapter()
     simulator = handshake.WorkflowHandshakeSimulator(
         adapter,
-        workflow="szlab_robot_liquid_stirring_demo_workflow",
+        workflow="s06_robot_workflow",
     )
     simulator.initialize()
 
     assert adapter.read(handshake.S06_BEAKER_SENSOR) is False
-    assert adapter.read(handshake.s04_sensor(1)) is False
 
 
 def test_s04_three_action_handshake_changes_sensor_and_resets() -> None:
@@ -682,23 +665,16 @@ def test_s09_add_liquid_handshake_supports_two_complete_sequences() -> None:
         adapter.write(handshake.S09_PARAMS_WRITTEN, True)
         accepted = simulator.step(now=clock)
         completed = simulator.step(now=clock + 0.5)
-        assert [(event.action, event.phase) for event in accepted] == [
-            (handshake.S09_ADD_LIQUID_ACTION, "accepted")
-        ]
-        assert [(event.action, event.phase) for event in completed] == [
-            (handshake.S09_ADD_LIQUID_ACTION, "completed")
-        ]
+        assert [(event.action, event.phase) for event in accepted] == [(handshake.S09_ADD_LIQUID_ACTION, "accepted")]
+        assert [(event.action, event.phase) for event in completed] == [(handshake.S09_ADD_LIQUID_ACTION, "completed")]
         assert adapter.read(handshake.S09_DONE) == process
         if process == 8:
-            assert adapter.read(handshake.S09_BALANCE_STABLE) is True
             assert adapter.read(handshake.S09_BALANCE_READING) == 1.0
 
         adapter.write(handshake.S09_PROCESS, 0)
         adapter.write(handshake.S09_PARAMS_WRITTEN, False)
         reset = simulator.step(now=clock + 0.6)
-        assert [(event.action, event.phase) for event in reset] == [
-            (handshake.S09_ADD_LIQUID_ACTION, "reset")
-        ]
+        assert [(event.action, event.phase) for event in reset] == [(handshake.S09_ADD_LIQUID_ACTION, "reset")]
         assert adapter.read(handshake.S09_DONE) == 0
         assert adapter.read(handshake.S09_ALLOW) is True
         clock += 1.0
@@ -707,7 +683,27 @@ def test_s09_add_liquid_handshake_supports_two_complete_sequences() -> None:
     assert simulator.all_cycles_idle() is True
 
 
-def test_s09_republishes_completion_edge_while_request_remains_asserted() -> None:
+def test_s09_density_done_writes_balance_arrays_not_stable_signal() -> None:
+    for workflow in (
+        handshake.S09_WORKFLOW,
+        handshake.SINGLE_SAMPLE_WORKFLOW,
+        handshake.ATTACHMENT_SINGLE_SAMPLE_WORKFLOW,
+    ):
+        spec = next(
+            item
+            for item in handshake.build_workflow_specs()
+            if item.workflow_id == workflow
+        )
+        assert handshake.S09_BALANCE_STABLE not in {
+            requirement.subject for requirement in spec.requirements
+        }
+        simulator = handshake.WorkflowHandshakeSimulator(
+            MemoryAdapter(),
+            workflow=workflow,
+        )
+        assert handshake.S09_BALANCE_STABLE not in simulator.initialization_values()
+        assert handshake.S09_BALANCE_STABLE not in simulator.cleanup_values()
+
     adapter = MemoryAdapter()
     simulator = handshake.WorkflowHandshakeSimulator(
         adapter,
@@ -715,29 +711,17 @@ def test_s09_republishes_completion_edge_while_request_remains_asserted() -> Non
         workflow=handshake.S09_WORKFLOW,
     )
     simulator.initialize()
-
-    adapter.write(handshake.S09_PROCESS, 5)
+    adapter.write(handshake.S09_DENSITY_COUNT, 3)
+    adapter.write(handshake.S09_PROCESS, 9)
     adapter.write(handshake.S09_PARAMS_WRITTEN, True)
-    assert [event.phase for event in simulator.step(now=0.0)] == ["accepted"]
-    assert [event.phase for event in simulator.step(now=0.5)] == ["completed"]
-    assert adapter.read(handshake.S09_DONE) == 5
-    assert simulator.completed_actions == 1
-
-    # Edge 若在完成码已经为 5 时才开始等待，会先等待 0，再等待新的 5。
-    # 代理只重发完成边沿，不重复执行或重复记录动作。
-    assert simulator.step(now=1.0) == []
-    assert adapter.read(handshake.S09_DONE) == 0
-    assert simulator.step(now=1.1) == []
-    assert adapter.read(handshake.S09_DONE) == 5
-    assert simulator.completed_actions == 1
-
-    adapter.write(handshake.S09_PROCESS, 0)
-    adapter.write(handshake.S09_PARAMS_WRITTEN, False)
-    reset = simulator.step(now=1.2)
-    assert [event.phase for event in reset] == ["reset"]
-    assert adapter.read(handshake.S09_DONE) == 0
-    assert adapter.read(handshake.S09_ALLOW) is True
-    assert simulator.all_cycles_idle() is True
+    assert simulator.step(now=0.0)
+    assert simulator.step(now=0.5)
+    assert adapter.read(handshake.S09_DONE) == 9
+    assert adapter.read(f"{handshake.S09_ASPIRATE_BALANCE_READINGS}[0]") == 1.0
+    assert adapter.read(f"{handshake.S09_ASPIRATE_BALANCE_READINGS}[2]") == 1.0
+    assert adapter.read(f"{handshake.S09_DISPENSE_BALANCE_READINGS}[1]") == 1.0
+    assert adapter.read(f"{handshake.S09_ASPIRATE_BALANCE_READINGS}[3]") == 0.0
+    assert handshake.S09_BALANCE_STABLE not in adapter.values
 
 
 def test_single_sample_workflow_drives_standard_robot_and_new_action_names() -> None:
@@ -876,14 +860,24 @@ def test_every_handshake_variable_exists_in_deployment_plc_csvs() -> None:
         variables.update(simulator.initialization_values())
         variables.update(simulator.cleanup_values())
 
-    csv_path = Path(__file__).parents[1] / "data" / "szlab_plc_0731.csv"
-    with csv_path.open(encoding="utf-16", newline="") as file:
-        rows = csv.reader(file, delimiter="\t")
-        csv_variables = {
-            row[1].strip() for row in rows if len(row) > 1 and row[1].strip()
-        }
+    csv_path = Path(__file__).parents[1] / "data" / "szlab_plc_0810.csv"
+    text = None
+    for encoding in ("utf-8-sig", "utf-16", "utf-16-le", "utf-8", "gbk", "gb18030"):
+        try:
+            text = csv_path.read_text(encoding=encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    assert text is not None
+    first_line = text.splitlines()[0] if text.splitlines() else ""
+    delimiter = "\t" if first_line.count("\t") > first_line.count(",") else ","
+    rows = csv.reader(text.splitlines(), delimiter=delimiter)
+    csv_variables = {
+        row[1].strip() for row in rows if len(row) > 1 and row[1].strip()
+    }
 
-    assert variables <= csv_variables
+    missing = sorted(variables - csv_variables)
+    assert not missing, missing
 
 
 def test_cleanup_only_resets_simulator_owned_outputs() -> None:

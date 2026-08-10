@@ -6,7 +6,7 @@ XUSE OPC UA 仿真服务器（纯服务器版）
   2. 允许匿名接入（NoSecurity），驱动一键连上
   3. 可选把 "_占位 / _空闲" 类节点初值设为 TRUE，便于握手代理跑 Type-B
 
-握手仿真已拆到独立进程 handshake_agent.py，按需另行启动。
+握手仿真已拆到独立进程 szlab_handshake_agent.py，按需另行启动。
 
 用法：
     python server.py                             # 默认参数启动
@@ -258,7 +258,7 @@ def main() -> int:
     log.info("  Endpoint : %s", endpoint)
     log.info("  Namespace: ns=%d (%s)", ns_idx, args.ns_uri)
     log.info("  Anon     : 允许匿名 (NoSecurity)")
-    log.info("  Handshake: 未启动 (如需请另开进程运行 handshake_agent.py)")
+    log.info("  Handshake: 未启动 (如需请另开进程运行 szlab_handshake_agent.py)")
     log.info("=" * 68)
 
     try:

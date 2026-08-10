@@ -98,7 +98,7 @@ wheel 中的演示 CSV、YAML 配置和 GUI 静态文件为只读包资源。上
 需要 Python 3.11.x。进入 `OpcUaSim` 目录后，在 Finder 中双击：
 
 - `start_gui.command`：推荐入口，启动 Web GUI 并自动打开浏览器；
-- `start_all.command`：同时启动 OPC UA Server 和默认 XUSE Handshake Agent。
+- `start_all.command`：同时启动 OPC UA Server 和 SZLab Handshake Agent。
 
 首次启动会自动创建 `.venv` 并安装 `requirements.txt`，后续启动会复用环境；
 依赖文件变化时会自动同步，不需要手动运行 Python 文件。
@@ -140,52 +140,47 @@ start_all.bat
 运行端到端验证：
 
 ```bat
-.venv\Scripts\python.exe tests\integration\xuse_handshake_check.py
+.venv\Scripts\python.exe -m pytest tests\test_szlab_handshake_agent.py -q
 ```
 
-测试覆盖：
-
-- Type D：初始化
-- Type C：参数下发
-- Type A：编码触发与位置代码回写
-- Type B：请求—加工—完成
+协议覆盖 Robot / S04–S09 及单样品原子流等 SZLab 握手场景。
 
 ### 手动安装
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe server.py
+.\.venv\Scripts\python.exe server.py --csv data/szlab_plc_0810.csv
 ```
 
 另开一个终端：
 
 ```powershell
-.\.venv\Scripts\python.exe handshake_agent.py
+.\.venv\Scripts\python.exe szlab_handshake_agent.py
 ```
 
 ## 默认变量表
 
-仓库包含 [`data/demo_variables.csv`](data/demo_variables.csv)，覆盖四类握手所需的
-16 个公开演示节点。克隆仓库后不传任何参数即可运行。
+仓库包含 [`data/szlab_plc_0810.csv`](data/szlab_plc_0810.csv)，与 Uni-Lab-SZLab
+官方部署图一致。克隆仓库后 GUI / `start_all` 默认使用该点表。
 
-真实设备的完整变量表通常属于具体 PLC/驱动工程，不在本仓库分发。使用自己的
-CSV 有三种方式：
+另附 [`data/demo_variables.csv`](data/demo_variables.csv) 作为最小演示 CSV。
+使用自己的 CSV 有三种方式：
 
 ```powershell
 # 临时指定
-.\start_all.bat "C:\project\xuse_variables.csv"
+.\start_all.bat "C:\project\szlab_variables.csv"
 
 # Python CLI
-python server.py --csv "C:\project\xuse_variables.csv"
-python handshake_agent.py --csv "C:\project\xuse_variables.csv"
+python server.py --csv "C:\project\szlab_variables.csv"
+python szlab_handshake_agent.py --url opc.tcp://127.0.0.1:4855/xuse_sim/
 
-# 环境变量（Server 和 Agent 都会读取）
-$env:OPCUASIM_CSV = "C:\project\xuse_variables.csv"
-.\start_all.bat
+# 环境变量（Server 读取默认 CSV）
+$env:OPCUASIM_CSV = "C:\project\szlab_variables.csv"
+.\start.bat
 ```
 
-Server 与 Agent 必须加载同一份 CSV。
+Server 必须加载与真机/驱动一致的点表；SZLab 握手代理按节点名读写，不单独加载 CSV。
 
 CSV 至少包含以下列：
 
@@ -201,9 +196,8 @@ Name,EnglishName,NodeType,DataType,NodeLanguage,NodeId
 | macOS | Windows | 用途 |
 |---|---|---|
 | `start.command` | `start.bat` | 只启动 OPC UA Server |
-| `start_handshake.command` | `start_handshake.bat` | 只启动默认 XUSE Handshake Agent |
 | `start_szlab_handshake.command` | `start_szlab_handshake.bat` | 只启动 SZLab Poly Studio 握手仿真 |
-| `start_all.command` | `start_all.bat` | 同时启动 Server 和默认 XUSE Agent |
+| `start_all.command` | `start_all.bat` | 同时启动 Server 和 SZLab Agent |
 | `start_gui.command` | `start_gui.bat` | 启动 Web GUI，默认地址 `http://127.0.0.1:18765/` |
 | — | `pick.bat` | 通过文件选择器加载一份或多份 CSV |
 | 启动器自动完成 | `setup_venv.bat` | 创建项目虚拟环境并安装依赖 |
@@ -236,7 +230,7 @@ Server：
 
 ```powershell
 python server.py --host 0.0.0.0 --port 4855 `
-  --csv data/demo_variables.csv `
+  --csv data/szlab_plc_0810.csv `
   --ns-uri urn:xuse:sim --ns-index 4
 ```
 
@@ -246,13 +240,12 @@ python server.py --host 0.0.0.0 --port 4855 `
 Handshake Agent：
 
 ```powershell
-python handshake_agent.py `
+python szlab_handshake_agent.py `
   --url opc.tcp://127.0.0.1:4855/xuse_sim/ `
-  --csv data/demo_variables.csv `
-  --config config/xuse_handshake.yaml
+  --config config/szlab_handshake.yaml
 ```
 
-`config/xuse_handshake.yaml` 可覆盖握手延时。
+`config/szlab_handshake.yaml` 可覆盖延时、工作流与初值。
 
 ## SZLab Poly Studio 握手仿真
 
@@ -263,9 +256,12 @@ python handshake_agent.py `
 
 覆盖范围包括 Robot 标准任务 `1/3-25`、S02-S11 物料在位传感器、S04
 磁搅、S05 拍照、S06 加液、S07 扫码/转位/注粉、S08 开关盖、S09 移液，
-以及标准物料转运、单样品物料感知全流程和使用 S0722 交接位的烧杯五工位搬运。
-S07/S09 天平值、S08 瓶盖暂存位、
+以及标准物料转运、单样品物料感知全流程、无 S07 扫码原子流程和使用 S0722
+交接位的烧杯五工位搬运。
+S07/S09 天平读数、S08 瓶盖暂存位、
 S09 TIP 盒/试剂瓶工位和液体余量都会随协议初始化或动作完成更新。
+真机没有可靠的 `S09天平读数稳定`，握手代理不会读写该点。
+S09 完成只以 `S09工艺完成` 为准；工艺 9 按 `S09测密度次数` 写入抽/放液天平数组前 N 项。
 
 先启动包含 SZLab 节点的 OPC UA Server，再运行：
 
@@ -279,9 +275,8 @@ start_szlab_handshake.bat
 start_szlab_handshake.bat opc.tcp://127.0.0.1:4855/xuse_sim/
 ```
 
-GUI 的“握手代理”中可将“仿真协议”切换为 `SZLab Poly Studio`。
-切换后会自动选用内置 `data/szlab_plc_0731.csv`，并显示“工作流调试参数”。
-可从 Uni-Lab-SZLab 当前 18 个工作流中
+GUI 的“握手代理”默认即 SZLab Poly Studio，并选用内置
+`data/szlab_plc_0810.csv`。可从 Uni-Lab-SZLab 当前 18 个工作流中
 选择一个定向调试。代理只解析、初始化和轮询该工作流实际使用的节点；选择
 “全部官方工作流”时同时启用所有协议模块。
 
@@ -336,8 +331,9 @@ S04 加工完成。如果 Server 不提供该节点，代理使用 `delays.stirr
 S09 按新版驱动保持 `S09参数写入完成=True` 直到本工艺完成，代理只有同时看到
 有效工艺号和参数完成信号才接单；Edge 将二者清零后，代理才复位完成码并允许下一轮。
 
-内置 `data/szlab_plc_0731.csv` 与官方部署图一致，并由测试校验包含全部握手变量。
+内置 `data/szlab_plc_0810.csv` 与官方部署图一致，并由测试校验包含全部握手变量。
 启动仿真 Server 时应加载这份表，或加载从更新 PLC 工程提取且包含同等节点的 CSV。
+S09 点表已去掉 `S09天平读数稳定`，并包含测密度次数与抽/放液天平数组。
 
 ## Web GUI
 
@@ -453,8 +449,8 @@ python -m ino_mcp.cli extract `
 
 ```text
 OpcUaSim/
-├── config/                       # XUSE / SZLab 握手配置
-├── data/                         # 开箱即用的 CSV 示例
+├── config/                       # SZLab 握手配置
+├── data/                         # 开箱即用的 CSV（含 szlab_plc_0810）
 ├── gui/                          # FastAPI Web GUI 与前端资源
 ├── ino_mcp/                      # 可选 MCP 客户端、配置、业务封装和 CLI
 ├── scripts/                      # 启动器共用的内部脚本
@@ -466,7 +462,6 @@ OpcUaSim/
 ├── common.py
 ├── cli.py                         # pip 安装后的统一命令分发
 ├── server.py
-├── handshake_agent.py
 ├── szlab_handshake_agent.py      # SZLab Robot / S04-S09 握手仿真
 ├── pyproject.toml                 # unilab-opcua-sim wheel 元数据
 ├── requirements.txt

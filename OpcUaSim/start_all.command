@@ -49,7 +49,7 @@ for arg in "$@"; do
         *.[cC][sS][vV]) CSV_ARGS+=(--csv "$arg") ;;
         *)
             opcuasim_log "[X] start_all.command 只接受 CSV 文件参数: $arg"
-            opcuasim_log "    其他 CLI 参数请使用 start.command 和 start_handshake.command。"
+            opcuasim_log "    其他 CLI 参数请使用 start.command 和 start_szlab_handshake.command。"
             exit 2
             ;;
     esac
@@ -58,7 +58,7 @@ done
 ENDPOINT="opc.tcp://$CLIENT_HOST:$PORT/xuse_sim/"
 
 printf '\n==============================================================\n'
-printf '  OpcUaSim Server + XUSE Handshake Agent\n'
+printf '  OpcUaSim Server + SZLab Handshake Agent\n'
 printf '  Endpoint: %s\n' "$ENDPOINT"
 printf '  按 Ctrl+C 同时停止两个进程。\n'
 printf '==============================================================\n\n'
@@ -77,9 +77,10 @@ if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
     exit 1
 fi
 
-opcuasim_log "Server 已就绪，启动 Handshake Agent..."
-"$OPCUASIM_PY" "$PROJECT_ROOT/handshake_agent.py" \
-    --url "$ENDPOINT" "${CSV_ARGS[@]}" &
+opcuasim_log "Server 已就绪，启动 SZLab Handshake Agent..."
+"$OPCUASIM_PY" "$PROJECT_ROOT/szlab_handshake_agent.py" \
+    --url "$ENDPOINT" \
+    --config "$PROJECT_ROOT/config/szlab_handshake.yaml" &
 AGENT_PID=$!
 
 while kill -0 "$SERVER_PID" >/dev/null 2>&1 \

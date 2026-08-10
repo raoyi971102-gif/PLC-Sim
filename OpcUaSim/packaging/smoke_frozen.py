@@ -94,7 +94,7 @@ def main() -> int:
 
                 agent = _request(
                     f"{base_url}/api/agent/start",
-                    {"host": "127.0.0.1", "port": opc_port, "profile": "xuse"},
+                    {"host": "127.0.0.1", "port": opc_port, "profile": "szlab"},
                 )
                 if agent.get("ok") is not True:
                     raise RuntimeError(f"Handshake child failed to start: {agent}")

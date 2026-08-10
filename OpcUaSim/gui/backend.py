@@ -4,7 +4,7 @@ gui.backend —— OpcUaSim 一体化 Web 控制面板
 一进程内集成：
   * InoProShop MCP 桥（打开/编辑/编译/下载/结构探查/GVL 提取 → CSV）
   * OPC UA Server 子进程管理（server.py）
-  * 握手代理子进程管理（handshake_agent.py）
+  * 握手代理子进程管理（szlab_handshake_agent.py）
   * 全局实时日志（SSE 推送到前端）
 
 进程模型：
@@ -111,7 +111,6 @@ SZLAB_WORKFLOW_IDS = (
     "szlab_mixer_workflow",
     "szlab_mixer_pump_production",
     "szlab_material_s06_workflow",
-    "szlab_robot_liquid_stirring_demo_workflow",
     "s07_粉桶与烧杯搬运后固体称量",
     "s_z_lab_标准物料转运",
     "s_z_lab_单样品全流程_物料感知",
@@ -1343,8 +1342,8 @@ class AgentStartReq(BaseModel):
     host: str = "127.0.0.1"
     port: int = 4855
     config: Optional[str] = None      # 可选 yaml
-    csv: Optional[str] = None
-    profile: str = "xuse"
+    csv: Optional[str] = None         # 兼容旧 GUI 字段；SZLab 代理不读 CSV
+    profile: str = "szlab"
     workflow: Optional[str] = None
     position: Optional[int] = Field(default=None, ge=1, le=6)
     pump: Optional[int] = Field(default=None, ge=1, le=3)
@@ -1388,33 +1387,19 @@ async def api_agent_start(req: AgentStartReq) -> Dict[str, Any]:
     if _STATE.agent_proc is not None and _STATE.agent_proc.poll() is None:
         raise HTTPException(400, "Handshake Agent 已在运行")
     url = f"opc.tcp://{req.host}:{req.port}/xuse_sim/"
-    profile = req.profile.strip().lower()
-    options: Dict[str, Any] = {}
-    if profile == "szlab":
-        cmd = runtime_command(
-            "szlab-handshake",
-            _ROOT / "szlab_handshake_agent.py",
-            ["--url", url],
-            python_executable=_find_python_exe(),
-        )
-        if req.config:
-            cmd.extend(["--config", req.config])
-        options = _extend_szlab_command(cmd, req)
-    elif profile == "xuse":
-        cmd = runtime_command(
-            "handshake",
-            _ROOT / "handshake_agent.py",
-            ["--url", url],
-            python_executable=_find_python_exe(),
-        )
-        if req.config:
-            cmd.extend(["--config", req.config])
-        csv_path = req.csv or _STATE.last_extract_csv or str(default_csv_path())
-        if not Path(csv_path).exists():
-            raise HTTPException(400, f"CSV 不存在: {csv_path}")
-        cmd.extend(["--csv", csv_path])
-    else:
-        raise HTTPException(400, "未知握手仿真类型，仅支持 xuse 或 szlab")
+    profile = (req.profile or "szlab").strip().lower()
+    if profile != "szlab":
+        raise HTTPException(400, "未知握手仿真类型，仅支持 szlab")
+
+    cmd = runtime_command(
+        "szlab-handshake",
+        _ROOT / "szlab_handshake_agent.py",
+        ["--url", url],
+        python_executable=_find_python_exe(),
+    )
+    if req.config:
+        cmd.extend(["--config", req.config])
+    options = _extend_szlab_command(cmd, req)
 
     log.info("启动 Handshake Agent: %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

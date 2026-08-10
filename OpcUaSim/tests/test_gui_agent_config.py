@@ -20,11 +20,11 @@ def test_workflow_catalog_matches_agent_and_gui() -> None:
         assert f'value="{workflow_id}"' in html
 
 
-def test_robot_liquid_stirring_demo_exposes_position_and_pump_options() -> None:
+def test_attachment_flow_exposes_position_and_pump_options() -> None:
     app_js = (Path(__file__).parents[1] / "gui" / "static" / "app.js").read_text(
         encoding="utf-8"
     )
-    workflow_id = "szlab_robot_liquid_stirring_demo_workflow"
+    workflow_id = "s_z_lab_单样品原子流程_无_s07_扫码"
     s04_workflows = app_js.split("const SZLAB_S04_WORKFLOWS", maxsplit=1)[1].split(
         "]);", maxsplit=1
     )[0]

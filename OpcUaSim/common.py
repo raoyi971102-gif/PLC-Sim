@@ -1,7 +1,7 @@
 """
 XUSE OPC UA 仿真项目 —— 公共工具模块
 ==========================================================================
-被 server.py 与 handshake_agent.py 共用：
+被 server.py 与 szlab_handshake_agent.py 共用：
   - 日志初始化 setup_logging()
   - CSV 数据结构 NodeDef 与 load_csv()
   - 数据类型映射表 VTYPE_MAP / DEFAULT_MAP

@@ -8,7 +8,7 @@
 3. ``serve``：写入测试先决条件，并监听 PC→PLC 信号，模拟 PLC 握手。
 
 协议目录与 Uni-Lab-SZLab 当前工作流源码对齐，覆盖 ``workflows`` 目录中全部
-19 个 Python 工作流、37 个唯一动作调用。状态机只依赖 :class:`VariableAdapter`
+18 个 Python 工作流、37 个唯一动作调用。状态机只依赖 :class:`VariableAdapter`
 这一处 interface；OPC UA、内存测试替身等实现都作为 adapter 接入。
 握手场景名称使用工作流源码中的真实函数名；旧版 S07/S09 场景名仍作为兼容别名：
 
@@ -33,8 +33,9 @@
 - ``szlab_s08_cap_station.process_cap_with_sample_parts``（S08 工艺 1-6）
 - ``szlab_mixer_pipetting_station.prepare_liquid_station``
 - ``szlab_mixer_pipetting_station.bind_sample_to_station``
-- ``szlab_mixer_pipetting_station.add_liquid``（内部工艺 5→7→8→6）
+- ``szlab_mixer_pipetting_station.add_liquid``（内部工艺 5→7→8→6；完成只认 ``S09工艺完成``）
 - ``szlab_mixer_pipetting_station.release_station``
+- S09 工艺 9 测密度：按 ``S09测密度次数`` 写入抽/放液天平数组前 N 项；不再使用 ``S09天平读数稳定``
 - ``szlab_poly_plc.get_stack_status``（只读，无动态握手）
 - ``szlab_mixer_robot.pick_beaker_from_s03``（机器人任务号 6）
 - ``szlab_mixer_robot.place_beaker_to_s06``（机器人任务号 11）
@@ -47,7 +48,7 @@
 - ``szlab_s07_solid_addition.dose_powder_with_materials``（S07 工艺 3）
 
 建议用 ``--workflow WORKFLOW_ID`` 定向运行单个工作流；选择
-``s06_robot_workflow`` 或 ``szlab_robot_liquid_stirring_demo_workflow`` 时会让 S06
+``s06_robot_workflow`` 时会让 S06
 烧杯传感器从 False 开始，并由任务 11/12 的握手周期切换；选择
 ``s09_移液调试``（或兼容别名 ``szlab_s09_pipetting_workflow``）时会初始化
 S09 工位和液体余量，并响应全部内部工艺。原有
@@ -170,8 +171,13 @@ S09_TIP_BOX = "S09TIP盒工位编号"
 S09_LIQUID_BOTTLE = "S09液体瓶编号"
 S09_TRANSFER_PRODUCT = "S09取放料产品"
 S09_TRANSFER_POSITION = "S09取放料编号"
+# 旧 PLC 表可能仍有该节点名，但当前 0810/真机交互不再使用稳定位。
+# 握手代理不得把它作为先决条件，也不得读写它。
 S09_BALANCE_STABLE = "S09天平读数稳定"
 S09_BALANCE_READING = "S09天平读数"
+S09_DENSITY_COUNT = "S09测密度次数"
+S09_ASPIRATE_BALANCE_READINGS = "S09抽液天平读数"
+S09_DISPENSE_BALANCE_READINGS = "S09放液天平读数"
 S09_TIP_BOX_SENSOR = {
     1: "传感器状态_上位机[4].NO[5]",
     2: "传感器状态_上位机[4].NO[6]",
@@ -195,13 +201,28 @@ S09_PROCESS_LABELS = {
     6: "放 TIP",
     7: "液体瓶取液",
     8: "烧杯放液",
-    9: "测密度抽液",
-    10: "测密度排液",
+    9: "测密度抽排液",
 }
 
 
 def s09_remaining_volume(bottle: int) -> str:
     return f"S09液体瓶{int(bottle)}剩余液量"
+
+
+def s09_density_balance_vars(base_name: str) -> list[str]:
+    return [f"{base_name}[{index}]" for index in range(10)]
+
+
+def clamp_s09_density_count(count: Any) -> int:
+    try:
+        value = int(count or 1)
+    except (TypeError, ValueError):
+        value = 1
+    if value < 1:
+        return 1
+    if value > 10:
+        return 10
+    return value
 
 
 def s08_cap_cache(slot: int, index: int) -> str:
@@ -317,7 +338,6 @@ WORKFLOW_IDS = (
     "szlab_mixer_workflow",
     "szlab_mixer_pump_production",
     "szlab_material_s06_workflow",
-    "szlab_robot_liquid_stirring_demo_workflow",
     S07_MATERIAL_WORKFLOW,
     STANDARD_TRANSFER_WORKFLOW,
     SINGLE_SAMPLE_WORKFLOW,
@@ -344,9 +364,6 @@ WORKFLOW_COMPONENTS = {
     "szlab_mixer_workflow": frozenset({"pump"}),
     "szlab_mixer_pump_production": frozenset({"pump"}),
     "szlab_material_s06_workflow": frozenset({"robot_s03", "robot_s06", "pump"}),
-    "szlab_robot_liquid_stirring_demo_workflow": frozenset(
-        {"robot_s06", "pump", "robot_s04", "stirrer"}
-    ),
     S07_MATERIAL_WORKFLOW: frozenset({"robot_s03", "robot_s07", "s07"}),
     STANDARD_TRANSFER_WORKFLOW: frozenset({"robot_standard"}),
     BEAKER_TRANSFER_CHAIN_WORKFLOW: frozenset({"robot_standard"}),
@@ -609,7 +626,7 @@ def _robot_common() -> tuple[Requirement, ...]:
 
 
 def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec, ...]:
-    """返回仓库当前 19 个 Python 工作流的先决条件目录。
+    """返回仓库当前 18 个 Python 工作流的先决条件目录。
 
     参数：``position`` 是 S04 调试库位编号；``pump`` 是 S06 储液泵选择。
     返回：工作流（Workflow）标识、动作及 PLC 先决条件的不可变目录。
@@ -662,9 +679,34 @@ def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec
         _opc_eq(s071_sensor(2), True, note="固定示例精粉桶源位 L1C2"),
         _opc_eq(s10_sensor(1), True, note="固定示例试剂瓶源位 R1C1"),
         _opc_eq(S09_TIP_BOX_SENSOR[1], True, note="移液前 TIP 盒 1 必须在位"),
-        _opc_eq(S09_BALANCE_STABLE, True),
         _opc_readable(S09_BALANCE_READING),
         _opc_readable(S07_BALANCE_READING),
+        _manual(
+            "config",
+            "s08_s09_site_witnesses",
+            "S08 双向瓶位、S09 试剂瓶位与 250 mL 负载必须完成现场验收",
+        ),
+    )
+    attachment_single_sample_requirements = (
+        *standard_transfer_requirements,
+        _opc_eq(S06_READY, True),
+        _opc_eq(S06_ALLOW, True),
+        _opc_eq(S07_HOME, True),
+        _opc_eq(S07_ALLOW, True),
+        _opc_eq(S08_HOME, True),
+        _opc_eq(S08_ALLOW, True),
+        _opc_eq(S09_ALLOW, True),
+        _opc_eq(S03_BEAKER_SENSOR, True, note="固定示例烧杯源位 L1B1"),
+        _opc_eq(S03_SAMPLE_VIAL_SENSOR, True, note="固定示例 250 mL 样品瓶源位 L1A1"),
+        _opc_eq(s10_sensor(1), True, note="固定示例试剂瓶源位 R1C1"),
+        _opc_eq(S09_TIP_BOX_SENSOR[1], True, note="移液前 TIP 盒 1 必须在位"),
+        _opc_readable(S09_BALANCE_READING),
+        _opc_readable(S07_BALANCE_READING),
+        _manual(
+            "config",
+            "s07_dosing_powder_preloaded",
+            "加样粉桶堆栈起始即已装入粗/精粉桶（P01/P02），本流程不再从上料仓转运",
+        ),
         _manual(
             "config",
             "s08_s09_site_witnesses",
@@ -738,30 +780,6 @@ def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec
                     S06_BEAKER_SENSOR, False, note="机器人放料前 S06 加液位必须为空"
                 ),
                 *s06_common,
-                _manual(
-                    "parameter", "skip_level_check", "False 时储液瓶传感器必须在位"
-                ),
-            ),
-        ),
-        WorkflowSpec(
-            "szlab_robot_liquid_stirring_demo_workflow",
-            (
-                "szlab_mixer_robot.submit_place_to_s06",
-                "szlab_mixer_pump.run_solvent_addition",
-                "szlab_mixer_robot.submit_pick_from_s06",
-                "szlab_mixer_robot.submit_place_to_s04",
-                "szlab_mixer_stirrer.run_stirring",
-            ),
-            (
-                *_robot_common(),
-                _opc_eq(
-                    S06_BEAKER_SENSOR, False, note="机器人放料前 S06 加液位必须为空"
-                ),
-                *s06_common,
-                _opc_eq(
-                    s04_sensor(position), False, note="机器人放料前 S04 搅拌位必须为空"
-                ),
-                *s04_common,
                 _manual(
                     "parameter", "skip_level_check", "False 时储液瓶传感器必须在位"
                 ),
@@ -854,8 +872,14 @@ def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec
                     S09_TIP_BOX_SENSOR[1], True, note="取放 TIP 工艺要求 TIP 盒在位"
                 ),
                 _opc_eq(S09_STATION_SENSOR[1], True, note="1 号试剂瓶和烧杯工位在位"),
-                _opc_eq(S09_BALANCE_STABLE, True, note="最终烧杯放液后读取稳定天平值"),
-                _opc_readable(S09_BALANCE_READING),
+                _opc_readable(
+                    S09_BALANCE_READING,
+                    note="工艺 8 可选遥测；完成判定只看 S09工艺完成，不等待稳定位",
+                ),
+                _opc_readable(
+                    f"{S09_ASPIRATE_BALANCE_READINGS}[0]",
+                    note="工艺 9 完成后按测密度次数读取抽/放液天平数组",
+                ),
                 _opc_gt(f"S09液体瓶{pump if pump in (1, 2) else 1}剩余液量", 0.0),
                 _manual(
                     "parameter", "tip_box_index/tip_index", "分别在 1-2、1-96 范围内"
@@ -1002,7 +1026,6 @@ def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec
                 "szlab_mixer_robot.place",
                 "host_node.transfer_resource",
                 "szlab_s08_cap_station.process_liquid_reagent_100ml_cap_with_material",
-                "szlab_s07_solid_addition.prepare_powder_cartridge_site",
                 "szlab_s07_solid_addition.dose_powder_with_two_materials",
                 "szlab_mixer_pump.add_solvent_with_materials",
                 "szlab_mixer_pipetting_station.add_liquid_with_materials",
@@ -1012,7 +1035,7 @@ def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec
                 "szlab_mixer_robot.pick_beaker",
                 "szlab_mixer_robot.pour_beaker_into_vial",
             ),
-            single_sample_requirements,
+            attachment_single_sample_requirements,
         ),
     )
 
@@ -1216,7 +1239,6 @@ class WorkflowHandshakeSimulator:
             in {
                 "s06_robot_workflow",
                 "szlab_material_s06_workflow",
-                "szlab_robot_liquid_stirring_demo_workflow",
             }
             or selected_workflow in SINGLE_SAMPLE_WORKFLOWS
         )
@@ -1277,6 +1299,7 @@ class WorkflowHandshakeSimulator:
                     s071_sensor(2): True,
                     s10_sensor(1): True,
                     s11_sensor(1, 1): False,
+                    s072_sensor(2): False,
                 }
             )
         if self.workflow == BEAKER_TRANSFER_CHAIN_WORKFLOW:
@@ -1367,8 +1390,15 @@ class WorkflowHandshakeSimulator:
                         sensor: station_present
                         for sensor in S09_STATION_SENSOR.values()
                     },
-                    S09_BALANCE_STABLE: True,
                     S09_BALANCE_READING: self.s09_balance_reading,
+                    S09_DENSITY_COUNT: 0,
+                    **{
+                        name: 0.0
+                        for name in (
+                            *s09_density_balance_vars(S09_ASPIRATE_BALANCE_READINGS),
+                            *s09_density_balance_vars(S09_DISPENSE_BALANCE_READINGS),
+                        )
+                    },
                     **{
                         s09_remaining_volume(index): self.s09_remaining_volume_ml
                         for index in range(1, 6)
@@ -1466,8 +1496,15 @@ class WorkflowHandshakeSimulator:
                     S09_DONE: 0,
                     **{sensor: False for sensor in S09_TIP_BOX_SENSOR.values()},
                     **{sensor: False for sensor in S09_STATION_SENSOR.values()},
-                    S09_BALANCE_STABLE: False,
                     S09_BALANCE_READING: 0.0,
+                    S09_DENSITY_COUNT: 0,
+                    **{
+                        name: 0.0
+                        for name in (
+                            *s09_density_balance_vars(S09_ASPIRATE_BALANCE_READINGS),
+                            *s09_density_balance_vars(S09_DISPENSE_BALANCE_READINGS),
+                        )
+                    },
                     **{s09_remaining_volume(index): 0.0 for index in range(1, 6)},
                 }
             )
@@ -1917,8 +1954,6 @@ class WorkflowHandshakeSimulator:
                 return S07_MATERIAL_PREPARE_ACTION
             if process == 3:
                 return S07_MATERIAL_DOSE_ACTION
-        if self.workflow == ATTACHMENT_SINGLE_SAMPLE_WORKFLOW and process == 2:
-            return S07_MATERIAL_PREPARE_ACTION
         if self.workflow in SINGLE_SAMPLE_WORKFLOWS and process == 3:
             return SINGLE_SAMPLE_S07_DOSE_ACTION
         return S07_SOLID_ACTION_BY_PROCESS[process]
@@ -2029,9 +2064,15 @@ class WorkflowHandshakeSimulator:
                     )
                 )
         elif cycle.phase == "executing" and now >= cycle.due_at:
-            if cycle.process in {8, 9, 10}:
-                self.adapter.write(S09_BALANCE_STABLE, True)
+            if cycle.process == 8:
+                # 可选遥测：驱动完成不等待该点，但仿真仍写入便于观察。
                 self.adapter.write(S09_BALANCE_READING, self.s09_balance_reading)
+            if cycle.process == 9:
+                count = clamp_s09_density_count(self.adapter.read(S09_DENSITY_COUNT))
+                for name in s09_density_balance_vars(S09_ASPIRATE_BALANCE_READINGS)[:count]:
+                    self.adapter.write(name, self.s09_balance_reading)
+                for name in s09_density_balance_vars(S09_DISPENSE_BALANCE_READINGS)[:count]:
+                    self.adapter.write(name, self.s09_balance_reading)
             self.adapter.write(S09_DONE, cycle.process)
             cycle.phase = "await_reset"
             cycle.due_at = now + S09_COMPLETION_HOLD_SECONDS
@@ -2213,7 +2254,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--s09-balance-reading",
         type=float,
         default=None,
-        help="S09 放液/测密度完成时写入的模拟天平读数（默认 1.0）",
+        help="S09 工艺 8 遥测/工艺 9 密度数组写入的模拟天平值（默认 1.0）",
     )
     parser.add_argument(
         "--max-actions",

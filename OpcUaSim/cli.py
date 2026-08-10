@@ -11,8 +11,8 @@ from typing import Optional, Sequence
 COMMANDS = {
     "gui": "gui.backend",
     "server": "server",
-    "handshake": "handshake_agent",
     "szlab-handshake": "szlab_handshake_agent",
+    "handshake": "szlab_handshake_agent",  # 兼容旧入口，等价于 szlab-handshake
     "ino": "ino_mcp.cli",
 }
 
@@ -25,8 +25,8 @@ OpcUaSim installed command. With no command, starts the Web GUI.
 commands:
   gui                Start the Web GUI (default)
   server             Start the CSV-driven OPC UA Server
-  handshake          Start the generic XUSE handshake agent
   szlab-handshake    Start the SZLab Poly Studio handshake agent
+  handshake          Alias of szlab-handshake
   ino                Run the optional InoProShop MCP CLI
 
 Run `opcua-sim <command> --help` for command-specific options.

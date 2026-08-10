@@ -97,7 +97,7 @@ jobs:
           # GUI 托管模式下 Server/Agent 是 GUI 的子进程。GUI 被杀时它们会变成孤儿
           # 继续占着 4855，导致下次在网页上点启动必然失败，所以这里一并清掉。
           pkill -f "$REMOTE_DIR/server\.py" || true
-          # 同时覆盖 handshake_agent.py 和 szlab_handshake_agent.py：漏杀任何一个
+          # 覆盖 SZLab 握手代理；历史命名 handshake_agent.py 一并匹配
           # 都会留下第二个代理去抢同一批握手标志位
           pkill -f "$REMOTE_DIR/[a-z_]*handshake_agent\.py" || true
           GUI_PATTERN="$REMOTE_DIR/.venv/bin/python -m gui.backend"

@@ -249,7 +249,7 @@
           <div class="form-grid">
             <label class="field full">
               <span>变量 CSV</span>
-              <input id="simCsv" value="data/demo_variables.csv">
+              <input id="simCsv" value="data/szlab_plc_0810.csv">
             </label>
             <label class="field full">
               <span>上传变量表（选本地 CSV，上传后自动回填上方路径）</span>
@@ -296,17 +296,6 @@
             <span class="pid-badge" id="pidAgent">PID --</span>
           </div>
           <div class="form-grid">
-            <label class="field full">
-              <span>仿真协议</span>
-              <select id="agentProfile">
-                <option value="xuse">XUSE 通用握手</option>
-                <option value="szlab">SZLab Poly Studio</option>
-              </select>
-            </label>
-            <label class="field full">
-              <span>变量 CSV</span>
-              <input id="agentCsv" value="data/demo_variables.csv">
-            </label>
             <label class="field">
               <span>服务器地址</span>
               <input id="agentHost" value="127.0.0.1">
@@ -317,9 +306,9 @@
             </label>
             <label class="field full">
               <span>代理配置</span>
-              <input id="agentCfg" value="config/xuse_handshake.yaml">
+              <input id="agentCfg" value="config/szlab_handshake.yaml">
             </label>
-            <details id="szlabAgentOptions" class="agent-options full hidden" open>
+            <details id="szlabAgentOptions" class="agent-options full" open>
               <summary>
                 <span>SZLab 工作流调试参数</span>
                 <small>仅初始化并响应所选工作流；参数在下次启动时生效</small>
@@ -342,7 +331,6 @@
                     <option value="szlab_mixer_workflow">混配加液</option>
                     <option value="szlab_mixer_pump_production">加液生产流程</option>
                     <option value="szlab_material_s06_workflow">S03/S06 物料感知加液</option>
-                    <option value="szlab_robot_liquid_stirring_demo_workflow">机器人转运 + S06 加液 + S04 搅拌演示</option>
                     <option value="s07_粉桶与烧杯搬运后固体称量">S07 粉桶/烧杯转运与称量</option>
                     <option value="s_z_lab_标准物料转运">标准物料转运</option>
                     <option value="s_z_lab_单样品全流程_物料感知">单样品全流程（物料感知）</option>
