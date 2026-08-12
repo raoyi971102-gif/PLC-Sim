@@ -1,0 +1,11 @@
+.git
+.github
+**/__pycache__
+**/.pytest_cache
+**/.venv
+**/*.pyc
+OpcUaSim/tests
+OpcUaSim/packaging
+OpcUaSim/tools
+OpcUaSim/vendor
+
