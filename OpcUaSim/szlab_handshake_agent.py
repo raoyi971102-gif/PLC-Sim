@@ -1299,6 +1299,7 @@ class WorkflowHandshakeSimulator:
                     s071_sensor(2): True,
                     s10_sensor(1): True,
                     s11_sensor(1, 1): False,
+                    s11_sensor(2, 1): False,
                     s072_sensor(2): False,
                 }
             )
@@ -1428,6 +1429,13 @@ class WorkflowHandshakeSimulator:
                 values[ROBOT_TOOL_PAYLOAD_SENSOR] = False
         if "robot_s03" in components:
             values[S03_BEAKER_SENSOR] = False
+        if self.workflow in SINGLE_SAMPLE_WORKFLOWS:
+            values.update(
+                {
+                    s11_sensor(1, 1): False,
+                    s11_sensor(2, 1): False,
+                }
+            )
         if "robot_s04" in components:
             values[s04_sensor(self.position)] = False
         if "stirrer" in components:
@@ -1727,24 +1735,54 @@ class WorkflowHandshakeSimulator:
             # Robot_任务写入完成=False 表示 Edge 已经消费完成码。任务号在
             # SKIP_RESET_AFTER_RUN 等配置下可能保留为上一任务，不能用它
             # 阻塞状态机重装填；下一轮仍以 write_done 的新上升沿触发。
-            if not write_done:
+            # 连续任务可能在两次轮询之间完成 False -> True，此时
+            # 任务号的变化是唯一可见的新周期证据，必须先结束旧周期。
+            next_task = (
+                write_done
+                and task != cycle.process
+                and self._robot_task_supported(task)
+            )
+            if not write_done or next_task:
+                previous_task = cycle.process
                 self.adapter.write(ROBOT_TASK_COMPLETE, 0)
-                self.adapter.write(ROBOT_WRITE_ALLOWED, True)
-                self.adapter.write(ROBOT_HOME, True)
                 events.append(
                     HandshakeEvent(
-                        self._robot_action(cycle.process),
+                        self._robot_action(previous_task),
                         "reset",
                         {
-                            "task_number": cycle.process,
+                            "task_number": previous_task,
                             "observed_task_number": task,
                         },
                     )
                 )
-                cycle.phase = "idle"
-                cycle.process = 0
-                cycle.position = 0
-                cycle.sensor = ""
+                if next_task:
+                    position, sensor = self._robot_task_position_and_sensor(task)
+                    self.adapter.write(ROBOT_WRITE_ALLOWED, False)
+                    self.adapter.write(ROBOT_HOME, False)
+                    cycle.phase = "executing"
+                    cycle.process = task
+                    cycle.position = position
+                    cycle.sensor = sensor
+                    cycle.duration_seconds = self._delay_seconds("robot")
+                    cycle.due_at = now + cycle.duration_seconds
+                    events.append(
+                        HandshakeEvent(
+                            self._robot_action(task),
+                            "accepted",
+                            {
+                                "task_number": task,
+                                **({"position": position} if position else {}),
+                                **({"sensor": sensor} if sensor else {}),
+                            },
+                        )
+                    )
+                else:
+                    self.adapter.write(ROBOT_WRITE_ALLOWED, True)
+                    self.adapter.write(ROBOT_HOME, True)
+                    cycle.phase = "idle"
+                    cycle.process = 0
+                    cycle.position = 0
+                    cycle.sensor = ""
         return events
 
     def _robot_action(self, task: int) -> str:

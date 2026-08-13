@@ -742,6 +742,8 @@ def test_single_sample_workflow_drives_standard_robot_and_new_action_names() -> 
     assert adapter.read(handshake.s04_sensor(1)) is False
     assert adapter.read(handshake.S05_MATERIAL_SENSOR) is False
     assert adapter.read(handshake.S06_BEAKER_SENSOR) is False
+    assert adapter.read(handshake.s11_sensor(1, 1)) is False
+    assert adapter.read(handshake.s11_sensor(2, 1)) is False
 
     adapter.write(handshake.S03_ROBOT_PRODUCT, 1)
     adapter.write(handshake.S03_ROBOT_POSITION, 1)
@@ -779,6 +781,62 @@ def test_single_sample_workflow_drives_standard_robot_and_new_action_names() -> 
     assert simulator._s08_action(5) == handshake.SINGLE_SAMPLE_S08_LIQUID_CAP_ACTION
     assert simulator._s08_action(3) == handshake.SINGLE_SAMPLE_S08_SAMPLE_CAP_ACTION
     assert simulator._s09_action() == handshake.SINGLE_SAMPLE_S09_ACTION
+
+
+def test_robot_handshake_accepts_next_task_when_reset_pulse_is_overtaken() -> None:
+    """紧邻任务覆盖复位沿时，仿真器仍应先复位旧任务再接受新任务。"""
+
+    adapter = MemoryAdapter()
+    simulator = handshake.WorkflowHandshakeSimulator(
+        adapter,
+        process_delay=0.5,
+        workflow=handshake.SINGLE_SAMPLE_WORKFLOW,
+    )
+    simulator.initialize()
+
+    adapter.write(handshake.ROBOT_TASK_NUMBER, 10)
+    adapter.write(handshake.ROBOT_WRITE_DONE, True)
+    simulator.step(now=0.0)
+    simulator.step(now=0.5)
+    assert adapter.read(handshake.ROBOT_TASK_COMPLETE) == 10
+
+    # Edge 已经开始下一条任务，PLC 仿真轮询未观察到中间极短的 False。
+    adapter.write(handshake.S11_ROBOT_PRODUCT, 1)
+    adapter.write(handshake.S11_ROBOT_POSITION, 1)
+    adapter.write(handshake.ROBOT_TASK_NUMBER, 23)
+    events = simulator.step(now=0.6)
+
+    assert [(event.phase, event.detail["task_number"]) for event in events] == [
+        ("reset", 10),
+        ("accepted", 23),
+    ]
+    assert adapter.read(handshake.ROBOT_TASK_COMPLETE) == 0
+    completed = simulator.step(now=1.1)
+    assert [(event.phase, event.detail["task_number"]) for event in completed] == [
+        ("completed", 23)
+    ]
+
+
+def test_single_sample_initialize_and_cleanup_reset_s11_output_slots() -> None:
+    adapter = MemoryAdapter()
+    simulator = handshake.WorkflowHandshakeSimulator(
+        adapter,
+        workflow=handshake.SINGLE_SAMPLE_WORKFLOW,
+    )
+    beaker_slot = handshake.s11_sensor(1, 1)
+    sample_vial_slot = handshake.s11_sensor(2, 1)
+
+    adapter.write(beaker_slot, True)
+    adapter.write(sample_vial_slot, True)
+    simulator.initialize()
+    assert adapter.read(beaker_slot) is False
+    assert adapter.read(sample_vial_slot) is False
+
+    adapter.write(beaker_slot, True)
+    adapter.write(sample_vial_slot, True)
+    simulator.cleanup()
+    assert adapter.read(beaker_slot) is False
+    assert adapter.read(sample_vial_slot) is False
 
 
 def test_cli_keeps_workflow_selector_compatibility(capsys: Any) -> None:

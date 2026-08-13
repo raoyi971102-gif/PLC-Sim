@@ -45,7 +45,7 @@ def test_attachment_flow_has_an_independent_scan_free_handshake_catalog() -> Non
     attachment = specs[handshake.ATTACHMENT_SINGLE_SAMPLE_WORKFLOW]
 
     assert handshake.SINGLE_SAMPLE_WORKFLOW in specs
-    assert len(specs) == 19
+    assert len(specs) == 18
     assert attachment.actions == (
         "szlab_mixer_robot.pick",
         "szlab_mixer_robot.place",
