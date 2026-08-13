@@ -739,6 +739,8 @@ def test_single_sample_workflow_drives_standard_robot_and_new_action_names() -> 
     assert adapter.read(handshake.s071_sensor(1)) is True
     assert adapter.read(handshake.s071_sensor(2)) is True
     assert adapter.read(handshake.s10_sensor(1)) is True
+    assert adapter.read(handshake.s11_sensor(1, 1)) is False
+    assert adapter.read(handshake.s11_sensor(2, 1)) is False
     assert adapter.read(handshake.s04_sensor(1)) is False
     assert adapter.read(handshake.S05_MATERIAL_SENSOR) is False
     assert adapter.read(handshake.S06_BEAKER_SENSOR) is False
