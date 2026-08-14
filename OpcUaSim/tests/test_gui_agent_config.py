@@ -36,6 +36,28 @@ def test_attachment_flow_exposes_position_and_pump_options() -> None:
     assert workflow_id in pump_workflows
 
 
+def test_dual_task_attachment_profile_is_selectable_in_gui() -> None:
+    """双 Task 握手场景可由 GUI 选择，并暴露共用工站参数。"""
+
+    html = (Path(__file__).parents[1] / "gui" / "static" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    app_js = (Path(__file__).parents[1] / "gui" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    workflow_id = "s_z_lab_双任务单样品原子流程_无_s07_扫码"
+    s04_workflows = app_js.split("const SZLAB_S04_WORKFLOWS", maxsplit=1)[1].split(
+        "]);", maxsplit=1
+    )[0]
+    pump_workflows = app_js.split("const SZLAB_PUMP_WORKFLOWS", maxsplit=1)[1].split(
+        "]);", maxsplit=1
+    )[0]
+
+    assert f'value="{workflow_id}"' in html
+    assert workflow_id in s04_workflows
+    assert workflow_id in pump_workflows
+
+
 def test_official_stack_workflow_exposes_only_pump_options() -> None:
     app_js = (Path(__file__).parents[1] / "gui" / "static" / "app.js").read_text(
         encoding="utf-8"

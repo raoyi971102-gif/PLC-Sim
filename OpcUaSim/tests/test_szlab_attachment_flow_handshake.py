@@ -45,7 +45,7 @@ def test_attachment_flow_has_an_independent_scan_free_handshake_catalog() -> Non
     attachment = specs[handshake.ATTACHMENT_SINGLE_SAMPLE_WORKFLOW]
 
     assert handshake.SINGLE_SAMPLE_WORKFLOW in specs
-    assert len(specs) == 18
+    assert len(specs) == 19
     assert attachment.actions == (
         "szlab_mixer_robot.pick",
         "szlab_mixer_robot.place",
@@ -62,6 +62,86 @@ def test_attachment_flow_has_an_independent_scan_free_handshake_catalog() -> Non
     )
     assert "szlab_s07_solid_addition.scan_powder_cartridges" not in attachment.actions
     assert "szlab_s07_solid_addition.prepare_powder_cartridge_site" not in attachment.actions
+
+
+def test_dual_task_attachment_profile_initializes_two_independent_material_lanes() -> None:
+    """双 Task 场景同时提供 A/B 源物料，并保持两条成品目标通道为空。"""
+
+    adapter = MemoryAdapter()
+    simulator = handshake.WorkflowHandshakeSimulator(
+        adapter,
+        process_delay=0.5,
+        workflow=handshake.DUAL_TASK_ATTACHMENT_WORKFLOW,
+    )
+
+    simulator.initialize()
+
+    for sensor in (
+        handshake.s03_sensor(1, 1),
+        handshake.s03_sensor(1, 2),
+        handshake.s03_sensor(3, 1),
+        handshake.s03_sensor(3, 2),
+        handshake.s10_sensor(1),
+        handshake.s10_sensor(2),
+    ):
+        assert adapter.read(sensor) is True
+    for sensor in (
+        handshake.s11_sensor(1, 1),
+        handshake.s11_sensor(1, 2),
+        handshake.s11_sensor(3, 1),
+        handshake.s11_sensor(3, 2),
+    ):
+        assert adapter.read(sensor) is False
+
+    simulator.cleanup()
+
+    for sensor in (
+        handshake.s03_sensor(1, 1),
+        handshake.s03_sensor(1, 2),
+        handshake.s03_sensor(3, 1),
+        handshake.s03_sensor(3, 2),
+        handshake.s10_sensor(1),
+        handshake.s10_sensor(2),
+        handshake.s11_sensor(1, 1),
+        handshake.s11_sensor(1, 2),
+        handshake.s11_sensor(3, 1),
+        handshake.s11_sensor(3, 2),
+    ):
+        assert adapter.read(sensor) is False
+
+
+def test_dual_task_attachment_profile_updates_only_the_commanded_lane() -> None:
+    """位置 2 的取放料握手只改变 Task B 传感器，不覆盖 Task A。"""
+
+    adapter = MemoryAdapter()
+    simulator = handshake.WorkflowHandshakeSimulator(
+        adapter,
+        process_delay=0.5,
+        workflow=handshake.DUAL_TASK_ATTACHMENT_WORKFLOW,
+    )
+    simulator.initialize()
+
+    adapter.write(handshake.S03_ROBOT_PRODUCT, 1)
+    adapter.write(handshake.S03_ROBOT_POSITION, 2)
+    adapter.write(handshake.ROBOT_TASK_NUMBER, 6)
+    adapter.write(handshake.ROBOT_WRITE_DONE, True)
+    simulator.step(now=0.0)
+    simulator.step(now=0.5)
+
+    assert adapter.read(handshake.s03_sensor(1, 1)) is True
+    assert adapter.read(handshake.s03_sensor(1, 2)) is False
+
+    adapter.write(handshake.ROBOT_WRITE_DONE, False)
+    simulator.step(now=0.6)
+    adapter.write(handshake.S11_ROBOT_PRODUCT, 1)
+    adapter.write(handshake.S11_ROBOT_POSITION, 2)
+    adapter.write(handshake.ROBOT_TASK_NUMBER, 23)
+    adapter.write(handshake.ROBOT_WRITE_DONE, True)
+    simulator.step(now=1.0)
+    simulator.step(now=1.5)
+
+    assert adapter.read(handshake.s11_sensor(1, 1)) is False
+    assert adapter.read(handshake.s11_sensor(1, 2)) is True
 
 
 def test_attachment_flow_completes_s07_dose_without_prepare_or_scan() -> None:

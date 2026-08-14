@@ -295,8 +295,13 @@ S07_MATERIAL_COMMIT_ACTION = SUPPORTED_ACTIONS[26]
 S07_MATERIAL_DOSE_ACTION = SUPPORTED_ACTIONS[27]
 SINGLE_SAMPLE_WORKFLOW = "s_z_lab_单样品全流程_物料感知"
 ATTACHMENT_SINGLE_SAMPLE_WORKFLOW = "s_z_lab_单样品原子流程_无_s07_扫码"
+DUAL_TASK_ATTACHMENT_WORKFLOW = "s_z_lab_双任务单样品原子流程_无_s07_扫码"
 SINGLE_SAMPLE_WORKFLOWS = frozenset(
-    {SINGLE_SAMPLE_WORKFLOW, ATTACHMENT_SINGLE_SAMPLE_WORKFLOW}
+    {
+        SINGLE_SAMPLE_WORKFLOW,
+        ATTACHMENT_SINGLE_SAMPLE_WORKFLOW,
+        DUAL_TASK_ATTACHMENT_WORKFLOW,
+    }
 )
 STANDARD_TRANSFER_WORKFLOW = "s_z_lab_标准物料转运"
 BEAKER_TRANSFER_CHAIN_WORKFLOW = "s_z_lab_烧杯五工位搬运"
@@ -342,6 +347,7 @@ WORKFLOW_IDS = (
     STANDARD_TRANSFER_WORKFLOW,
     SINGLE_SAMPLE_WORKFLOW,
     ATTACHMENT_SINGLE_SAMPLE_WORKFLOW,
+    DUAL_TASK_ATTACHMENT_WORKFLOW,
     BEAKER_TRANSFER_CHAIN_WORKFLOW,
 )
 
@@ -371,6 +377,9 @@ WORKFLOW_COMPONENTS = {
         {"robot_standard", "pump", "stirrer", "photo", "s07", "s08", "s09"}
     ),
     ATTACHMENT_SINGLE_SAMPLE_WORKFLOW: frozenset(
+        {"robot_standard", "pump", "stirrer", "photo", "s07", "s08", "s09"}
+    ),
+    DUAL_TASK_ATTACHMENT_WORKFLOW: frozenset(
         {"robot_standard", "pump", "stirrer", "photo", "s07", "s08", "s09"}
     ),
 }
@@ -713,6 +722,20 @@ def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec
             "S08 双向瓶位、S09 试剂瓶位与 250 mL 负载必须完成现场验收",
         ),
     )
+    attachment_single_sample_actions = (
+        "szlab_mixer_robot.pick",
+        "szlab_mixer_robot.place",
+        "host_node.transfer_resource",
+        "szlab_s08_cap_station.process_liquid_reagent_100ml_cap_with_material",
+        "szlab_s07_solid_addition.dose_powder_with_two_materials",
+        "szlab_mixer_pump.add_solvent_with_materials",
+        "szlab_mixer_pipetting_station.add_liquid_with_materials",
+        "szlab_mixer_stirrer.stir_beaker",
+        "szlab_s08_cap_station.process_sample_vial_250ml_cap_with_material",
+        "szlab_mixer_photoshotting.inspect_beaker",
+        "szlab_mixer_robot.pick_beaker",
+        "szlab_mixer_robot.pour_beaker_into_vial",
+    )
     return (
         WorkflowSpec(
             "szlab_magnetic_stirring_workflow",
@@ -1021,21 +1044,20 @@ def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec
         ),
         WorkflowSpec(
             ATTACHMENT_SINGLE_SAMPLE_WORKFLOW,
-            (
-                "szlab_mixer_robot.pick",
-                "szlab_mixer_robot.place",
-                "host_node.transfer_resource",
-                "szlab_s08_cap_station.process_liquid_reagent_100ml_cap_with_material",
-                "szlab_s07_solid_addition.dose_powder_with_two_materials",
-                "szlab_mixer_pump.add_solvent_with_materials",
-                "szlab_mixer_pipetting_station.add_liquid_with_materials",
-                "szlab_mixer_stirrer.stir_beaker",
-                "szlab_s08_cap_station.process_sample_vial_250ml_cap_with_material",
-                "szlab_mixer_photoshotting.inspect_beaker",
-                "szlab_mixer_robot.pick_beaker",
-                "szlab_mixer_robot.pour_beaker_into_vial",
-            ),
+            attachment_single_sample_actions,
             attachment_single_sample_requirements,
+        ),
+        WorkflowSpec(
+            DUAL_TASK_ATTACHMENT_WORKFLOW,
+            attachment_single_sample_actions,
+            (
+                *attachment_single_sample_requirements,
+                _opc_eq(s03_sensor(1, 2), True, note="Task B 烧杯源位 L1B2"),
+                _opc_eq(s03_sensor(3, 2), True, note="Task B 样品瓶源位 L1A2"),
+                _opc_eq(s10_sensor(2), True, note="Task B 试剂瓶源位 R1C2"),
+                _opc_eq(s11_sensor(1, 2), False, note="Task B 烧杯成品位 L1B2"),
+                _opc_eq(s11_sensor(3, 2), False, note="Task B 样品瓶成品位 L1A2"),
+            ),
         ),
     )
 
@@ -1303,6 +1325,16 @@ class WorkflowHandshakeSimulator:
                     s072_sensor(2): False,
                 }
             )
+        if self.workflow == DUAL_TASK_ATTACHMENT_WORKFLOW:
+            values.update(
+                {
+                    s03_sensor(1, 2): True,
+                    s03_sensor(3, 2): True,
+                    s10_sensor(2): True,
+                    s11_sensor(1, 2): False,
+                    s11_sensor(3, 2): False,
+                }
+            )
         if self.workflow == BEAKER_TRANSFER_CHAIN_WORKFLOW:
             values.update(
                 {
@@ -1432,8 +1464,24 @@ class WorkflowHandshakeSimulator:
         if self.workflow in SINGLE_SAMPLE_WORKFLOWS:
             values.update(
                 {
+                    S03_BEAKER_SENSOR: False,
+                    S03_SAMPLE_VIAL_SENSOR: False,
+                    s071_sensor(1): False,
+                    s071_sensor(2): False,
+                    s10_sensor(1): False,
                     s11_sensor(1, 1): False,
                     s11_sensor(2, 1): False,
+                    s072_sensor(2): False,
+                }
+            )
+        if self.workflow == DUAL_TASK_ATTACHMENT_WORKFLOW:
+            values.update(
+                {
+                    s03_sensor(1, 2): False,
+                    s03_sensor(3, 2): False,
+                    s10_sensor(2): False,
+                    s11_sensor(1, 2): False,
+                    s11_sensor(3, 2): False,
                 }
             )
         if "robot_s04" in components:
