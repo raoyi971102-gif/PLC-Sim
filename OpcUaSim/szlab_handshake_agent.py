@@ -513,7 +513,9 @@ def s09_transfer_sensor(product_type: int, position: int) -> str:
         except KeyError as exc:
             raise ValueError("S09 液体试剂瓶位置必须在 1-5 范围内") from exc
     if product_type == 3 and position == 1:
-        return S09_STATION_SENSOR[1]
+        # S09 的烧杯位没有独立在位传感器。NO[7] 属于 1 号试剂瓶位；
+        # 若烧杯取放也改写它，随后向 REAGENT1 放瓶会被误判为库位已占用。
+        return ""
     raise ValueError("S09 取放料产品/位置不合法")
 
 
