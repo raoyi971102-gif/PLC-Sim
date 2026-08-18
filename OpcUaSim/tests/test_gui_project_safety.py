@@ -5,8 +5,8 @@ import asyncio
 import pytest
 from fastapi import HTTPException
 
-import gui.backend as backend
 from common import NodeDef
+from gui import backend
 
 
 def test_online_download_is_fail_closed_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -35,6 +35,28 @@ def test_online_download_requires_explicit_confirmation(monkeypatch: pytest.Monk
         backend._STATE.toolkit = None
 
 
+def test_online_download_cannot_bypass_ptlc_deploy_handshake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证 GUI 不会绕过 pTLC 下载握手直接调用 CODESYS 在线下载。
+
+    参数：``monkeypatch`` 用于开启旧环境开关，证明开关本身不再构成授权。
+    返回：无；断言即使显式确认也以 501 关闭失败且不会触碰工具包。
+    """
+
+    monkeypatch.setenv("OPCUASIM_ALLOW_ONLINE_DEPLOY", "true")
+    backend._STATE.toolkit = object()
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(backend.api_project_download(
+                backend.DownloadReq(strategy="online", confirm_online=True)
+            ))
+        assert exc_info.value.status_code == 501
+        assert "PlcProgramService" in str(exc_info.value.detail)
+    finally:
+        backend._STATE.toolkit = None
+
+
 def test_gui_cannot_write_plc_owned_output_without_maintenance_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -52,4 +74,3 @@ def test_gui_cannot_write_plc_owned_output_without_maintenance_override(
         assert exc_info.value.status_code == 409
     finally:
         backend._STATE.server_node_defs = []
-

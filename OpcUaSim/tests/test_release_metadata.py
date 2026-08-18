@@ -4,6 +4,7 @@ import ast
 import subprocess
 import sys
 import tomllib
+import zipfile
 from pathlib import Path
 
 PROJECT_DIRECTORY = Path(__file__).parents[1]
@@ -32,12 +33,19 @@ def test_package_version_sources_match() -> None:
 
 
 def test_package_supports_only_python_311() -> None:
+    """验证发行元数据只支持 Python 3.11 且测试构建工具声明完整。"""
+
     project = tomllib.loads(
         (PROJECT_DIRECTORY / "pyproject.toml").read_text(encoding="utf-8")
     )
 
     assert project["project"]["requires-python"] == ">=3.11,<3.12"
-    assert project["project"]["optional-dependencies"]["test"] == ["pytest>=8.0"]
+    assert project["project"]["optional-dependencies"]["test"] == [
+        "pytest>=8.0",
+        "build>=1.2,<2",
+        "setuptools>=68",
+        "wheel>=0.42",
+    ]
 
 
 def test_launchers_require_an_exact_python_311_interpreter() -> None:
@@ -116,6 +124,49 @@ def test_one_click_requirements_use_native_release_constraints() -> None:
     )
 
     assert requirements <= constraints
+
+
+def test_wheel_contains_ptlc_behavior_contracts(tmp_path: Path) -> None:
+    """验证 wheel 包含 PTLC 八工位行为契约。
+
+    参数：``tmp_path`` 是 pytest 提供的隔离构建目录。
+    返回：无；从实际 wheel 公共交付物检查八份行为 YAML 均已打包。
+    """
+
+    wheel_directory = tmp_path / "dist"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "build",
+            "--wheel",
+            "--no-isolation",
+            "--outdir",
+            str(wheel_directory),
+            str(PROJECT_DIRECTORY),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    wheel_path = next(wheel_directory.glob("*.whl"))
+    with zipfile.ZipFile(wheel_path) as archive:
+        behavior_names = {
+            Path(name).name
+            for name in archive.namelist()
+            if "/config/ptlc_behavior/" in name and name.endswith(".yaml")
+        }
+
+    assert behavior_names == {
+        "collect.yaml",
+        "develop.yaml",
+        "feedlift.yaml",
+        "photoscrape.yaml",
+        "pump.yaml",
+        "rail.yaml",
+        "sampling.yaml",
+        "staging_a.yaml",
+    }
 
 
 def _requirement_lines(path: Path) -> set[str]:

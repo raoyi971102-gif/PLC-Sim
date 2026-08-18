@@ -488,7 +488,7 @@ _BACKEND_CAPABILITIES = {
     "ptlc_write_ownership": True,
     "ptlc_behavior_contract": True,
     "project_version_history": True,
-    "safe_online_deploy": True,
+    "safe_online_deploy": False,
 }
 
 
@@ -797,6 +797,8 @@ class DownloadReq(BaseModel):
 
 
 def _online_deploy_allowed() -> bool:
+    """读取旧版在线下载开关；它只用于迁移提示，不再代表下载授权。"""
+
     return os.environ.get("OPCUASIM_ALLOW_ONLINE_DEPLOY", "").strip().lower() in {
         "1", "true", "yes", "on",
     }
@@ -804,23 +806,26 @@ def _online_deploy_allowed() -> bool:
 
 @app.get("/api/project/deploy/preflight")
 async def api_project_deploy_preflight() -> Dict[str, Any]:
+    """返回项目摘要和在线部署能力；当前只允许保存与编译。"""
+
     _require_tk()
     repo = _STATE.version_repo
     sha = await asyncio.to_thread(repo.current_sha256) if repo else None
     return {
         "ok": True,
-        "online_allowed": _online_deploy_allowed(),
+        "online_allowed": False,
         "project_sha256": sha,
         "warning": (
-            "online 策略会尝试登录真实 PLC 并执行全量下载；"
-            "save_compile 只保存和编译，不会下装"
+            "GUI 在线下载已关闭：当前实现没有接入 PlcProgramService 的维护门、"
+            "一次性授权和 PLC_Deploy_* 握手；save_compile 只保存和编译，不会下装"
         ),
     }
 
 
 @app.post("/api/project/download")
 async def api_project_download(req: DownloadReq) -> Dict[str, Any]:
-    tk = _require_tk()
+    """保存编译项目；真实 PLC 在线下载在安全服务接入前关闭失败。"""
+
     try:
         strat = DownloadStrategy(req.strategy)
     except ValueError:
@@ -833,6 +838,12 @@ async def api_project_download(req: DownloadReq) -> Dict[str, Any]:
             )
         if not req.confirm_online:
             raise HTTPException(400, "在线下载必须显式 confirm_online=true")
+        raise HTTPException(
+            501,
+            "GUI 在线下载已禁用：必须通过 pTLC PlcProgramService 完成维护门、"
+            "目标绑定、一次性授权和 PLC_Deploy_* 握手后才能恢复",
+        )
+    tk = _require_tk()
     async with _STATE.mcp_lock:
         _STATE.busy = "downloading"
         try:
@@ -1726,6 +1737,14 @@ def _extend_ptlc_command(cmd: List[str], req: AgentStartReq) -> Dict[str, Any]:
 
 @app.post("/api/agent/start")
 async def api_agent_start(req: AgentStartReq) -> Dict[str, Any]:
+    """启动握手代理并确认进程通过最小存活窗口。
+
+    参数：``req`` 描述代理类型、OPC UA 地址及调试参数。
+    返回：代理进程身份、实际类型和生效参数。
+    异常：外部托管、重复启动、参数非法或子进程立即退出时抛出 HTTP 错误；
+    已退出进程绝不作为运行中的代理发布给 GUI。
+    """
+
     if _STATE.attached:
         raise HTTPException(400, "已挂接外部 Agent，由进程管理器托管")
     if _STATE.agent_proc is not None and _STATE.agent_proc.poll() is None:
@@ -1769,6 +1788,14 @@ async def api_agent_start(req: AgentStartReq) -> Dict[str, Any]:
     _STATE.agent_proc = proc
     _STATE.agent_profile = profile
     await asyncio.sleep(0.3)
+    exit_code = proc.poll()
+    if exit_code is not None:
+        _STATE.agent_proc = None
+        _STATE.agent_profile = None
+        raise HTTPException(
+            500,
+            f"{profile} 握手代理启动后立即退出（exit_code={exit_code}），请查看日志",
+        )
     return {
         "ok": True,
         "pid": proc.pid,

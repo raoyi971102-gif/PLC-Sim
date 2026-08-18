@@ -9,7 +9,6 @@ from common import load_ptlc_nodes, load_yaml
 from ptlc_handshake_agent import OpcUaVariableAdapter, PtlcHandshakeSimulator
 from server import add_nodes, build_server, register_ns_padding
 
-
 ROOT = Path(__file__).parents[1]
 
 
@@ -20,6 +19,8 @@ def _free_port() -> int:
 
 
 def test_ptlc_nested_gvl_array_and_l2_cycle_through_real_opcua() -> None:
+    """验证真实 OPC UA 连接下的嵌套 GVL、数组和连续轴运动握手。"""
+
     port = _free_port()
     endpoint = f"opc.tcp://127.0.0.1:{port}/xuse_sim/"
     defs = load_ptlc_nodes(ROOT / "config" / "ptlc_nodes.yaml")
@@ -41,7 +42,8 @@ def test_ptlc_nested_gvl_array_and_l2_cycle_through_real_opcua() -> None:
         adapter.write("Rail_L2_RequestSeq", 99)
         adapter.write("Rail_L2_Start", True)
 
-        assert [event.phase for event in sim.step(now=1.0)] == ["accepted", "completed"]
+        assert [event.phase for event in sim.step(now=1.0)] == ["accepted"]
+        assert [event.phase for event in sim.step(now=1.2)] == ["completed"]
         assert adapter.read("Rail_L2_State") == 20
         assert adapter.read("Rail_L2_CompletedSeq") == 99
         assert adapter.read("Rail_ActPos") == 12.5

@@ -275,7 +275,7 @@ $("btnDownload").onclick = async () => {
     if (strategy === "online") {
       const preflight = await get("/api/project/deploy/preflight");
       if (!preflight.online_allowed) throw new Error(
-        "在线下载后端安全门未开启。请确认现场后设置 OPCUASIM_ALLOW_ONLINE_DEPLOY=true"
+        preflight.warning || "GUI 在线下载已关闭，请通过 pTLC PlcProgramService 部署"
       );
       if (!confirm(preflight.warning + "\n\n工程 SHA256:\n" + preflight.project_sha256)) return;
       payload.confirm_online = true;

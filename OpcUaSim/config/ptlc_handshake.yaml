@@ -28,38 +28,16 @@ initial_values:
   Tank_Blow_S: 0.10
   Tank_Dry_S: 0.05
 
-# P1 连续运动近似：按距离/速度推进 ActPos，动作完成前持续更新 L2 Step。
+# 轴运动按动作码构造，按距离/速度连续推进 ActPos。
 motion_speed:
   Sampling: 250.0
   PhotoScrape: 180.0
-motion_effects:
-  Sampling:
-    - {from: Sampling_4X_Target, to: Sampling_4X_ActPos}
-    - {from: Sampling_3Y_Target, to: Sampling_3Y_ActPos}
-    - {from: Sampling_5Z_Target, to: Sampling_5Z_ActPos}
-  PhotoScrape:
-    - {from: Spot_7Y_Target, to: Spot_7Y_ActPos}
-    - {from: Photo_8Y_Target, to: Photo_8Y_ActPos}
-    - {from: PhotoScrape_Align_TargetX, to: PhotoScrape_9X_ActPos}
-    - {from: PhotoScrape_Align_TargetZ, to: PhotoScrape_10Z_ActPos}
 
 process:
   material: {feed_count: 12, waste_count: 0}
 
-# 正常完成后的通用到位镜像。
+# 正常完成后的通用副作用。轴运动必须按动作码声明，禁止整站镜像。
 station_effects:
-  Sampling:
-    copy:
-      - {from: Sampling_4X_Target, to: Sampling_4X_ActPos}
-      - {from: Sampling_3Y_Target, to: Sampling_3Y_ActPos}
-      - {from: Sampling_5Z_Target, to: Sampling_5Z_ActPos}
-  PhotoScrape:
-    copy:
-      - {from: Spot_7Y_Target, to: Spot_7Y_ActPos}
-      - {from: Photo_8Y_Target, to: Photo_8Y_ActPos}
-      - {from: Photo_8Y_Target, to: PhotoScrape_8Y_ActPos}
-      - {from: PhotoScrape_Align_TargetX, to: PhotoScrape_9X_ActPos}
-      - {from: PhotoScrape_Align_TargetZ, to: PhotoScrape_10Z_ActPos}
   Rail:
     copy:
       - {from: Rail_Target_Position, to: Rail_Current_Position}

@@ -7,8 +7,12 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
+from gui import backend
 from gui.backend import (
-    AgentStartReq, SZLAB_WORKFLOW_IDS, _extend_ptlc_command, _extend_szlab_command,
+    SZLAB_WORKFLOW_IDS,
+    AgentStartReq,
+    _extend_ptlc_command,
+    _extend_szlab_command,
     api_version,
 )
 from szlab_handshake_agent import WORKFLOW_IDS
@@ -157,8 +161,44 @@ def test_ptlc_profiles_are_selectable_in_gui() -> None:
         "ptlc_write_ownership": True,
         "ptlc_behavior_contract": True,
         "project_version_history": True,
-        "safe_online_deploy": True,
+        "safe_online_deploy": False,
     }
+
+
+def test_agent_start_reports_an_immediate_process_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证代理进程立即退出时启动 API 关闭失败。
+
+    参数：``monkeypatch`` 隔离进程边界，``tmp_path`` 承载运行期状态文件。
+    返回：无；断言 API 不会把已经退出的代理误报为启动成功。
+    """
+
+    class FailedProcess:
+        """表示创建成功但立即以状态码 2 退出的外部代理进程。"""
+
+        pid = 4321
+        stdout = None
+        stderr = None
+
+        def poll(self) -> int:
+            """返回进程退出码 2；无参数，返回整数退出码。"""
+
+            return 2
+
+    monkeypatch.setattr(backend.subprocess, "Popen", lambda *args, **kwargs: FailedProcess())
+    monkeypatch.setattr(backend, "_pipe_to_logger", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backend, "runtime_data_dir", lambda: tmp_path)
+    backend._STATE.agent_proc = None
+    backend._STATE.attached = False
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(backend.api_agent_start(AgentStartReq(profile="ptlc")))
+
+    assert exc_info.value.status_code == 500
+    assert "启动后立即退出" in str(exc_info.value.detail)
+    assert backend._STATE.agent_proc is None
 
 
 def test_szlab_agent_rejects_unknown_workflow() -> None:

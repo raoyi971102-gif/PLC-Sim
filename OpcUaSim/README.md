@@ -262,10 +262,19 @@ Server 会创建
 `Objects/DeviceSet/Inovance-ARM-Linux/Resources/Application/GlobalVars/Host_Computer`
 嵌套 GVL，支持 Boolean、Byte、Int16、Int32、Float、Double、String 以及固定长度真数组。
 代理响应 Sampling、Collect、Develop、PhotoScrape、FeedLift、Pump、Rail、StagingA
-八个统一 L2 通道。`config/ptlc_behavior/` 固化各工位合法动作码、步序和错误码；
-未知动作按对应派发器错误码 REJECTED，不再默认成功。代理还提供完整
-`PLC_Deploy_*` PREPARING/SAFE/COMMITTED 状态机、连续轴位置推进、地轨数组索引、
-Develop 50/55/56/98 排液过程、Pump/FeedLift 过程状态和确定性事件快照。
+八个统一 L2 通道。`config/ptlc_behavior/` 固化各工位合法动作码、步序、错误码、
+门禁、计时常量和原始注记；未知动作按对应派发器错误码 REJECTED，不再默认成功。
+代理还提供完整 `PLC_Deploy_*` PREPARING/SAFE/COMMITTED 状态机、动作级连续轴位置
+推进、地轨数组索引、Develop 50/55/56/98 排液过程、Collect A22/A23 瓶互锁、
+Collect A30 多轮排液/沉淀计时以及确定性事件快照。
+
+当前只有下列动作完成了可验证建模：Sampling `10/32/33`，Collect
+`21/22/23/24/30/41/42/43`，Develop `50/51`，PhotoScrape `32/36/41/52`，
+Pump `10/20`，Rail `10`，StagingA `24/25`。其他已知合法动作会进入 RUNNING 并
+在状态快照中标成 `unmodeled`，等待上位机绝对超时或 Reset；代理不会用统一延时
+伪造 DONE。可用 `opcua-sim ptlc-handshake list` 查看 `modeled_actions` 和
+`unmodeled_actions`。代理重启会锁存现有 Start 电平并保留 L2 序号/终态，避免重放
+保持为高电平的非幂等请求。
 
 GUI 中分别把节点模型和代理类型切换为 PTLC 即可。PLC 输出默认禁止从在线变量栏
 写入，避免 GUI 与握手代理形成双写者；只有显式勾选“维护写入”才可临时覆盖。
@@ -303,8 +312,9 @@ python tools/snapshot_ptlc_profile.py \
 下载策略有明确区别：
 
 - `save_compile`：只保存并编译，绝不登录 PLC；
-- `online`：尝试真实全量下载，默认关闭。必须设置
-  `OPCUASIM_ALLOW_ONLINE_DEPLOY=true`，通过工程 SHA256 预检，并在 GUI 二次确认。
+- `online`：GUI 当前无条件关闭。旧的 `OPCUASIM_ALLOW_ONLINE_DEPLOY` 开关和二次
+  确认不构成部署授权；必须先接入 pTLC `PlcProgramService` 的维护门、目标绑定、
+  一次性授权和 `PLC_Deploy_*` 握手，才能重新开放真实 PLC 下载。
 
 ## SZLab Poly Studio 握手仿真
 
@@ -527,6 +537,11 @@ OpcUaSim/
 ├── vendor/inoproshop-mcp/        # 可选第三方 bundle 放置点
 ├── common.py
 ├── cli.py                         # pip 安装后的统一命令分发
+├── ptlc_agent_cli.py              # PTLC 代理命令行生命周期
+├── ptlc_behavior.py               # 八工位行为契约加载器
+├── ptlc_effects.py                # 配置化变量副作用
+├── ptlc_handshake_agent.py        # PTLC L2 状态机
+├── ptlc_runtime.py                # OPC 适配器、运行状态与故障模型
 ├── server.py
 ├── szlab_handshake_agent.py      # SZLab Robot / S04-S09 握手仿真
 ├── pyproject.toml                 # unilab-opcua-sim wheel 元数据
@@ -539,6 +554,6 @@ OpcUaSim/
 
 - OPC UA Server 默认允许匿名访问且使用 `NoSecurity`，仅适合开发、测试或受控网络。
 - `0.0.0.0` 会监听所有网卡；只需本机使用时可传 `--host 127.0.0.1`。
-- MCP 的在线下载属于非幂等设备操作；后端默认拒绝，只有显式安全门、预检 SHA 和
-  二次确认全部满足才会尝试。IronPython 在线接口仍受 InoProShop SP11 能力限制，
-  返回结果未包含 `ONLINE_DOWNLOAD_OK` 时一律视为未确认成功，不得自动重试。
+- MCP 的在线下载属于非幂等设备操作；GUI 后端当前无条件拒绝，不会因环境变量、
+  预检 SHA 或人工二次确认而绕过。真实部署必须由 pTLC `PlcProgramService` 完成
+  维护门、目标绑定、一次性授权及 `PLC_Deploy_*` 握手，且不得自动重试。
