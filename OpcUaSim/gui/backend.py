@@ -115,6 +115,7 @@ SZLAB_WORKFLOW_IDS = (
     "s_z_lab_单样品原子流程_无_s07_扫码",
     "s_z_lab_单样品原子流程_机器人原子动作",
     "s_z_lab_双任务单样品原子流程_无_s07_扫码",
+    "s_z_lab_双任务单样品原子流程_机器人原子动作",
     "s_z_lab_烧杯五工位搬运",
 )
 SZLAB_WORKFLOW_ALIASES = (

@@ -3,13 +3,16 @@ from __future__ import annotations
 import socket
 from typing import Any
 
+import pytest
 from opcua import ua
 
 from common import NodeDef
 from server import add_nodes, build_server, register_ns_padding
 from szlab_handshake_agent import (
+    ATOMIC_TRANSFER_ACTION,
     ATTACHMENT_SINGLE_SAMPLE_WORKFLOW,
     DUAL_TASK_ATTACHMENT_WORKFLOW,
+    DUAL_TASK_ROBOT_ATOMIC_WORKFLOW,
     ROBOT_HOME,
     ROBOT_TASK_COMPLETE,
     ROBOT_TASK_NUMBER,
@@ -133,10 +136,20 @@ def test_robot_handshake_through_real_opcua_adapter() -> None:
         server.stop()
 
 
-def test_dual_task_second_pick_is_rejected_through_real_opcua_adapter() -> None:
-    """验证真实 OPC UA Server/Client 路径也会拒绝双 TASK 的第二次取料。
+@pytest.mark.parametrize(
+    ("workflow", "expected_action"),
+    (
+        (DUAL_TASK_ATTACHMENT_WORKFLOW, "szlab_mixer_robot.pick"),
+        (DUAL_TASK_ROBOT_ATOMIC_WORKFLOW, ATOMIC_TRANSFER_ACTION),
+    ),
+)
+def test_dual_task_second_pick_is_rejected_through_real_opcua_adapter(
+    workflow: str,
+    expected_action: str,
+) -> None:
+    """验证真实 OPC UA 路径拒绝两个双 TASK 场景的第二次取料。
 
-    参数：无。
+    参数：``workflow`` 是双 TASK 工作流（Workflow），``expected_action`` 是事件动作标识。
     返回：无；断言拒绝命令不会生成完成码、不会移除 Task B 源物料或释放夹爪。
     """
 
@@ -160,7 +173,7 @@ def test_dual_task_second_pick_is_rejected_through_real_opcua_adapter() -> None:
     }
     blueprint = WorkflowHandshakeSimulator(
         _MemoryAdapter(seed),
-        workflow=DUAL_TASK_ATTACHMENT_WORKFLOW,
+        workflow=workflow,
         process_delay=0.0,
     )
     values = {**blueprint.initialization_values(), **seed}
@@ -168,7 +181,7 @@ def test_dual_task_second_pick_is_rejected_through_real_opcua_adapter() -> None:
     adapter = OpcUaVariableAdapter(endpoint, "ns=4;s=上位机通讯|")
     simulator = WorkflowHandshakeSimulator(
         adapter,
-        workflow=DUAL_TASK_ATTACHMENT_WORKFLOW,
+        workflow=workflow,
         process_delay=0.0,
     )
     try:
@@ -183,6 +196,7 @@ def test_dual_task_second_pick_is_rejected_through_real_opcua_adapter() -> None:
         )
         first_pick = simulator.step(now=1.0) + simulator.step(now=1.0)
         assert [event.phase for event in first_pick] == ["accepted", "completed"]
+        assert {event.action for event in first_pick} == {expected_action}
         assert nodes[ROBOT_TOOL_PAYLOAD_SENSOR].get_value() is True
         assert nodes[s03_sensor(1, 1)].get_value() is False
 
@@ -199,6 +213,7 @@ def test_dual_task_second_pick_is_rejected_through_real_opcua_adapter() -> None:
         assert [(event.phase, event.detail["reason"]) for event in rejected] == [
             ("rejected", "夹爪已持有物料，禁止再次取料")
         ]
+        assert {event.action for event in rejected} == {expected_action}
         assert nodes[ROBOT_HOME].get_value() is True
         assert nodes[ROBOT_WRITE_ALLOWED].get_value() is False
         assert nodes[ROBOT_TASK_COMPLETE].get_value() == 0

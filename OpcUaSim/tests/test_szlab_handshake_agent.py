@@ -33,7 +33,7 @@ class MemoryAdapter:
 
 
 def test_catalog_matches_official_workflow_snapshot() -> None:
-    """验证 PLC-Sim 目录包含 19 个 SZLab 官方工作流和双 TASK 扩展。
+    """验证 PLC-Sim 目录包含 19 个 SZLab 官方工作流和两个双 TASK 扩展。
 
     参数：无。
     返回：无；断言工作流（Workflow）标识和动作目录。
@@ -41,7 +41,7 @@ def test_catalog_matches_official_workflow_snapshot() -> None:
 
     specs = handshake.build_workflow_specs()
 
-    assert len(specs) == 20
+    assert len(specs) == 21
     assert len(handshake.SUPPORTED_ACTIONS) == 37
     assert {item.workflow_id for item in specs} == {
         "szlab_magnetic_stirring_workflow",
@@ -63,6 +63,7 @@ def test_catalog_matches_official_workflow_snapshot() -> None:
         "s_z_lab_单样品原子流程_无_s07_扫码",
         "s_z_lab_单样品原子流程_机器人原子动作",
         "s_z_lab_双任务单样品原子流程_无_s07_扫码",
+        "s_z_lab_双任务单样品原子流程_机器人原子动作",
         "s_z_lab_烧杯五工位搬运",
     }
 

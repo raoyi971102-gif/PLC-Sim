@@ -8,7 +8,7 @@
 3. ``serve``：写入测试先决条件，并监听 PC→PLC 信号，模拟 PLC 握手。
 
 协议目录与 Uni-Lab-SZLab 当前工作流源码对齐，覆盖 ``workflows`` 目录中全部
-19 个 Python 工作流和 1 个 PLC-SIM 双 TASK 扩展场景，共 37 个唯一动作调用。
+19 个 Python 工作流和 2 个 PLC-SIM 双 TASK 扩展场景，共 37 个唯一动作调用。
 状态机只依赖 :class:`VariableAdapter`
 这一处 interface；OPC UA、内存测试替身等实现都作为 adapter 接入。
 握手场景名称使用工作流源码中的真实函数名；旧版 S07/S09 场景名仍作为兼容别名：
@@ -294,12 +294,26 @@ SINGLE_SAMPLE_WORKFLOW = "s_z_lab_单样品全流程_物料感知"
 ATTACHMENT_SINGLE_SAMPLE_WORKFLOW = "s_z_lab_单样品原子流程_无_s07_扫码"
 ROBOT_ATOMIC_SINGLE_SAMPLE_WORKFLOW = "s_z_lab_单样品原子流程_机器人原子动作"
 DUAL_TASK_ATTACHMENT_WORKFLOW = "s_z_lab_双任务单样品原子流程_无_s07_扫码"
+DUAL_TASK_ROBOT_ATOMIC_WORKFLOW = "s_z_lab_双任务单样品原子流程_机器人原子动作"
+ROBOT_ATOMIC_WORKFLOWS = frozenset(
+    {
+        ROBOT_ATOMIC_SINGLE_SAMPLE_WORKFLOW,
+        DUAL_TASK_ROBOT_ATOMIC_WORKFLOW,
+    }
+)
+DUAL_TASK_WORKFLOWS = frozenset(
+    {
+        DUAL_TASK_ATTACHMENT_WORKFLOW,
+        DUAL_TASK_ROBOT_ATOMIC_WORKFLOW,
+    }
+)
 SINGLE_SAMPLE_WORKFLOWS = frozenset(
     {
         SINGLE_SAMPLE_WORKFLOW,
         ATTACHMENT_SINGLE_SAMPLE_WORKFLOW,
         ROBOT_ATOMIC_SINGLE_SAMPLE_WORKFLOW,
         DUAL_TASK_ATTACHMENT_WORKFLOW,
+        DUAL_TASK_ROBOT_ATOMIC_WORKFLOW,
     }
 )
 STANDARD_TRANSFER_WORKFLOW = "s_z_lab_标准物料转运"
@@ -351,6 +365,7 @@ WORKFLOW_IDS = (
     ATTACHMENT_SINGLE_SAMPLE_WORKFLOW,
     ROBOT_ATOMIC_SINGLE_SAMPLE_WORKFLOW,
     DUAL_TASK_ATTACHMENT_WORKFLOW,
+    DUAL_TASK_ROBOT_ATOMIC_WORKFLOW,
     BEAKER_TRANSFER_CHAIN_WORKFLOW,
 )
 
@@ -390,6 +405,9 @@ WORKFLOW_COMPONENTS = {
         {"robot_standard", "pump", "stirrer", "photo", "s07", "s08", "s09"}
     ),
     DUAL_TASK_ATTACHMENT_WORKFLOW: frozenset(
+        {"robot_standard", "pump", "stirrer", "photo", "s07", "s08", "s09"}
+    ),
+    DUAL_TASK_ROBOT_ATOMIC_WORKFLOW: frozenset(
         {"robot_standard", "pump", "stirrer", "photo", "s07", "s08", "s09"}
     ),
 }
@@ -641,7 +659,7 @@ def _robot_common() -> tuple[Requirement, ...]:
 
 
 def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec, ...]:
-    """返回 19 个官方工作流与双 TASK 扩展场景的先决条件目录。
+    """返回 19 个官方工作流与两个双 TASK 扩展场景的先决条件目录。
 
     参数：``position`` 是 S04 调试库位编号；``pump`` 是 S06 储液泵选择。
     返回：工作流（Workflow）标识、动作及 PLC 先决条件的不可变目录。
@@ -742,6 +760,35 @@ def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec
         "szlab_mixer_photoshotting.inspect_beaker",
         "szlab_mixer_robot.pick_beaker",
         "szlab_mixer_robot.pour_beaker_into_vial",
+    )
+    # 机器人原子动作目录只暴露完整物理动作；内部库存（Inventory）记账仍由 Host 保持唯一权威。
+    robot_atomic_actions = (
+        ATOMIC_TRANSFER_ACTION,
+        "szlab_s07_solid_addition.dose_powder_with_two_materials",
+        "szlab_mixer_pump.add_solvent_with_materials",
+        "szlab_s08_cap_station.process_liquid_reagent_100ml_cap_with_material",
+        "szlab_mixer_pipetting_station.add_liquid_with_materials",
+        "szlab_mixer_stirrer.stir_beaker",
+        SINGLE_SAMPLE_DENSITY_ACTION,
+        "szlab_mixer_photoshotting.inspect_beaker",
+        "szlab_s08_cap_station.process_sample_vial_250ml_cap_with_material",
+        ATOMIC_PICK_POUR_PLACE_ACTION,
+    )
+    robot_atomic_requirements = (
+        *attachment_single_sample_requirements,
+        _manual(
+            "runtime",
+            "host_node.transfer_resource",
+            "机器人原子动作内部必须能同步调用 Host 库存权威完成唯一记账",
+        ),
+    )
+    # 双 TASK 场景共享一台机器人，但两条物料通道各自拥有独立来源与成品库位（Site）。
+    dual_task_requirements = (
+        _opc_eq(s03_sensor(1, 2), True, note="Task B 烧杯源位 L1B2"),
+        _opc_eq(s03_sensor(3, 2), True, note="Task B 样品瓶源位 L1A2"),
+        _opc_eq(s10_sensor(2), True, note="Task B 试剂瓶源位 R1C2"),
+        _opc_eq(s11_sensor(1, 2), False, note="Task B 烧杯成品位 L1B2"),
+        _opc_eq(s11_sensor(3, 2), False, note="Task B 样品瓶成品位 L1A2"),
     )
     return (
         WorkflowSpec(
@@ -1057,37 +1104,23 @@ def build_workflow_specs(position: int = 1, pump: int = 1) -> tuple[WorkflowSpec
         ),
         WorkflowSpec(
             ROBOT_ATOMIC_SINGLE_SAMPLE_WORKFLOW,
-            (
-                ATOMIC_TRANSFER_ACTION,
-                "szlab_s07_solid_addition.dose_powder_with_two_materials",
-                "szlab_mixer_pump.add_solvent_with_materials",
-                "szlab_s08_cap_station.process_liquid_reagent_100ml_cap_with_material",
-                "szlab_mixer_pipetting_station.add_liquid_with_materials",
-                "szlab_mixer_stirrer.stir_beaker",
-                SINGLE_SAMPLE_DENSITY_ACTION,
-                "szlab_mixer_photoshotting.inspect_beaker",
-                "szlab_s08_cap_station.process_sample_vial_250ml_cap_with_material",
-                ATOMIC_PICK_POUR_PLACE_ACTION,
-            ),
-            (
-                *attachment_single_sample_requirements,
-                _manual(
-                    "runtime",
-                    "host_node.transfer_resource",
-                    "机器人原子动作内部必须能同步调用 Host 库存权威完成唯一记账",
-                ),
-            ),
+            robot_atomic_actions,
+            robot_atomic_requirements,
         ),
         WorkflowSpec(
             DUAL_TASK_ATTACHMENT_WORKFLOW,
             attachment_single_sample_actions,
             (
                 *attachment_single_sample_requirements,
-                _opc_eq(s03_sensor(1, 2), True, note="Task B 烧杯源位 L1B2"),
-                _opc_eq(s03_sensor(3, 2), True, note="Task B 样品瓶源位 L1A2"),
-                _opc_eq(s10_sensor(2), True, note="Task B 试剂瓶源位 R1C2"),
-                _opc_eq(s11_sensor(1, 2), False, note="Task B 烧杯成品位 L1B2"),
-                _opc_eq(s11_sensor(3, 2), False, note="Task B 样品瓶成品位 L1A2"),
+                *dual_task_requirements,
+            ),
+        ),
+        WorkflowSpec(
+            DUAL_TASK_ROBOT_ATOMIC_WORKFLOW,
+            robot_atomic_actions,
+            (
+                *robot_atomic_requirements,
+                *dual_task_requirements,
             ),
         ),
     )
@@ -1357,7 +1390,7 @@ class WorkflowHandshakeSimulator:
                     s072_sensor(2): False,
                 }
             )
-        if self.workflow == DUAL_TASK_ATTACHMENT_WORKFLOW:
+        if self.workflow in DUAL_TASK_WORKFLOWS:
             values.update(
                 {
                     s03_sensor(1, 2): True,
@@ -1506,7 +1539,7 @@ class WorkflowHandshakeSimulator:
                     s072_sensor(2): False,
                 }
             )
-        if self.workflow == DUAL_TASK_ATTACHMENT_WORKFLOW:
+        if self.workflow in DUAL_TASK_WORKFLOWS:
             values.update(
                 {
                     s03_sensor(1, 2): False,
@@ -2019,7 +2052,7 @@ class WorkflowHandshakeSimulator:
         if self.workflow == "all" and task in ROBOT_ACTION_BY_TASK:
             return ROBOT_ACTION_BY_TASK[task]
         if "robot_standard" in self.enabled_components:
-            if self.workflow == ROBOT_ATOMIC_SINGLE_SAMPLE_WORKFLOW:
+            if self.workflow in ROBOT_ATOMIC_WORKFLOWS:
                 if task in {10, 25}:
                     return ATOMIC_PICK_POUR_PLACE_ACTION
                 if task == 23 and int(self.adapter.read(S11_ROBOT_PRODUCT) or 0) == 1:

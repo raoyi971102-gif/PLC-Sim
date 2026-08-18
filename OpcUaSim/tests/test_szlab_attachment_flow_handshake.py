@@ -45,7 +45,7 @@ def test_attachment_flow_has_an_independent_scan_free_handshake_catalog() -> Non
     attachment = specs[handshake.ATTACHMENT_SINGLE_SAMPLE_WORKFLOW]
 
     assert handshake.SINGLE_SAMPLE_WORKFLOW in specs
-    assert len(specs) == 20
+    assert len(specs) == 21
     assert attachment.actions == (
         "szlab_mixer_robot.pick",
         "szlab_mixer_robot.place",
@@ -66,7 +66,7 @@ def test_attachment_flow_has_an_independent_scan_free_handshake_catalog() -> Non
 
 
 def test_robot_atomic_profile_only_exposes_composite_robot_actions() -> None:
-    """机器人原子动作场景只向新工作流登记两个复合动作。
+    """单、双 TASK 机器人原子动作场景只登记两个复合机器人动作。
 
     参数：无。
     返回：无；断言普通机器人子动作没有重新进入新工作流的动作目录。
@@ -76,6 +76,7 @@ def test_robot_atomic_profile_only_exposes_composite_robot_actions() -> None:
         spec.workflow_id: spec for spec in handshake.build_workflow_specs()
     }
     atomic = specs[handshake.ROBOT_ATOMIC_SINGLE_SAMPLE_WORKFLOW]
+    dual_atomic = specs[handshake.DUAL_TASK_ROBOT_ATOMIC_WORKFLOW]
 
     assert handshake.ATOMIC_TRANSFER_ACTION in atomic.actions
     assert handshake.ATOMIC_PICK_POUR_PLACE_ACTION in atomic.actions
@@ -83,6 +84,60 @@ def test_robot_atomic_profile_only_exposes_composite_robot_actions() -> None:
     assert "szlab_mixer_robot.place" not in atomic.actions
     assert "szlab_mixer_robot.pick_beaker" not in atomic.actions
     assert "szlab_mixer_robot.pour_beaker_into_vial" not in atomic.actions
+    assert dual_atomic.actions == atomic.actions
+    dual_requirement_subjects = {
+        requirement.subject for requirement in dual_atomic.requirements
+    }
+    assert {
+        handshake.s03_sensor(1, 2),
+        handshake.s03_sensor(3, 2),
+        handshake.s10_sensor(2),
+        handshake.s11_sensor(1, 2),
+        handshake.s11_sensor(3, 2),
+    } <= dual_requirement_subjects
+
+
+def test_dual_task_robot_atomic_profile_rejects_parallel_second_pick() -> None:
+    """双 TASK 机器人原子动作场景共享夹爪，持料时拒绝另一通道取料。
+
+    参数：无。
+    返回：无；断言 Task A 映射为原子搬运，Task B 第二次取料不产生物理效果。
+    """
+
+    adapter = MemoryAdapter()
+    simulator = handshake.WorkflowHandshakeSimulator(
+        adapter,
+        process_delay=0.5,
+        workflow=handshake.DUAL_TASK_ROBOT_ATOMIC_WORKFLOW,
+    )
+    simulator.initialize()
+
+    assert adapter.read(handshake.s03_sensor(1, 2)) is True
+    adapter.write(handshake.S03_ROBOT_PRODUCT, 1)
+    adapter.write(handshake.S03_ROBOT_POSITION, 1)
+    adapter.write(handshake.ROBOT_TASK_NUMBER, 6)
+    adapter.write(handshake.ROBOT_WRITE_DONE, True)
+    first_pick = simulator.step(now=0.0) + simulator.step(now=0.5)
+
+    assert [(event.action, event.phase) for event in first_pick] == [
+        (handshake.ATOMIC_TRANSFER_ACTION, "accepted"),
+        (handshake.ATOMIC_TRANSFER_ACTION, "completed"),
+    ]
+    assert adapter.read(handshake.ROBOT_TOOL_PAYLOAD_SENSOR) is True
+
+    adapter.write(handshake.ROBOT_WRITE_DONE, False)
+    simulator.step(now=0.6)
+    adapter.write(handshake.S03_ROBOT_POSITION, 2)
+    adapter.write(handshake.ROBOT_WRITE_DONE, True)
+    rejected = simulator.step(now=1.0)
+
+    assert [(event.action, event.phase) for event in rejected] == [
+        (handshake.ATOMIC_TRANSFER_ACTION, "rejected")
+    ]
+    assert rejected[0].detail["reason"] == "夹爪已持有物料，禁止再次取料"
+    assert adapter.read(handshake.s03_sensor(1, 2)) is True
+    assert adapter.read(handshake.ROBOT_TASK_COMPLETE) == 0
+    assert simulator.completed_actions == 1
 
 
 def test_dual_task_attachment_profile_initializes_two_independent_material_lanes() -> None:

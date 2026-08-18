@@ -623,6 +623,7 @@ const SZLAB_S04_WORKFLOWS = new Set([
   "s_z_lab_单样品原子流程_无_s07_扫码",
   "s_z_lab_单样品原子流程_机器人原子动作",
   "s_z_lab_双任务单样品原子流程_无_s07_扫码",
+  "s_z_lab_双任务单样品原子流程_机器人原子动作",
 ]);
 const SZLAB_PUMP_WORKFLOWS = new Set([
   "all",
@@ -635,6 +636,7 @@ const SZLAB_PUMP_WORKFLOWS = new Set([
   "s_z_lab_单样品原子流程_无_s07_扫码",
   "s_z_lab_单样品原子流程_机器人原子动作",
   "s_z_lab_双任务单样品原子流程_无_s07_扫码",
+  "s_z_lab_双任务单样品原子流程_机器人原子动作",
 ]);
 const SZLAB_S07_WORKFLOWS = new Set([
   "all",
@@ -644,6 +646,7 @@ const SZLAB_S07_WORKFLOWS = new Set([
   "s_z_lab_单样品原子流程_无_s07_扫码",
   "s_z_lab_单样品原子流程_机器人原子动作",
   "s_z_lab_双任务单样品原子流程_无_s07_扫码",
+  "s_z_lab_双任务单样品原子流程_机器人原子动作",
 ]);
 const SZLAB_S09_WORKFLOWS = new Set([
   "all",
@@ -652,6 +655,7 @@ const SZLAB_S09_WORKFLOWS = new Set([
   "s_z_lab_单样品原子流程_无_s07_扫码",
   "s_z_lab_单样品原子流程_机器人原子动作",
   "s_z_lab_双任务单样品原子流程_无_s07_扫码",
+  "s_z_lab_双任务单样品原子流程_机器人原子动作",
 ]);
 
 function syncSzlabAgentOptions() {

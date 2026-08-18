@@ -58,8 +58,8 @@ def test_dual_task_attachment_profile_is_selectable_in_gui() -> None:
     assert workflow_id in pump_workflows
 
 
-def test_robot_atomic_profile_is_selectable_with_all_station_options() -> None:
-    """机器人原子动作工作流可由 GUI 选择，并显示 S04、S06、S07 和 S09 参数。
+def test_robot_atomic_profiles_are_selectable_with_all_station_options() -> None:
+    """单、双 TASK 机器人原子动作工作流可由 GUI 选择，并显示全部工站参数。
 
     参数：无。
     返回：无；断言工作流（Workflow）标识进入全部相关 GUI 选项集。
@@ -71,7 +71,10 @@ def test_robot_atomic_profile_is_selectable_with_all_station_options() -> None:
     app_js = (Path(__file__).parents[1] / "gui" / "static" / "app.js").read_text(
         encoding="utf-8"
     )
-    workflow_id = "s_z_lab_单样品原子流程_机器人原子动作"
+    workflow_ids = (
+        "s_z_lab_单样品原子流程_机器人原子动作",
+        "s_z_lab_双任务单样品原子流程_机器人原子动作",
+    )
     option_sets = (
         "SZLAB_S04_WORKFLOWS",
         "SZLAB_PUMP_WORKFLOWS",
@@ -79,12 +82,13 @@ def test_robot_atomic_profile_is_selectable_with_all_station_options() -> None:
         "SZLAB_S09_WORKFLOWS",
     )
 
-    assert f'value="{workflow_id}"' in html
-    for option_set in option_sets:
-        values = app_js.split(f"const {option_set}", maxsplit=1)[1].split(
-            "]);", maxsplit=1
-        )[0]
-        assert workflow_id in values
+    for workflow_id in workflow_ids:
+        assert f'value="{workflow_id}"' in html
+        for option_set in option_sets:
+            values = app_js.split(f"const {option_set}", maxsplit=1)[1].split(
+                "]);", maxsplit=1
+            )[0]
+            assert workflow_id in values
 
 
 def test_official_stack_workflow_exposes_only_pump_options() -> None:
