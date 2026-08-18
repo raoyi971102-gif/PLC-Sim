@@ -58,6 +58,8 @@ try:
     from ..ino_mcp.client import McpClient, McpError
     from ..ino_mcp.config import resolve_mcp_config
     from ..ino_mcp.toolkit import InoToolkit, DownloadStrategy
+    from ..ino_mcp.project_versions import ProjectVersionRepo
+    from ..ino_mcp.symbols import parse_symbols, set_symbol_pragma
     from ..ino_mcp.extractor import (
         extract_gvl_variables,
         parse_gvl_declaration,
@@ -83,6 +85,8 @@ except ImportError:  # Direct `python -m gui.backend` compatibility.
     from ino_mcp.client import McpClient, McpError
     from ino_mcp.config import resolve_mcp_config
     from ino_mcp.toolkit import InoToolkit, DownloadStrategy
+    from ino_mcp.project_versions import ProjectVersionRepo
+    from ino_mcp.symbols import parse_symbols, set_symbol_pragma
     from ino_mcp.extractor import (
         extract_gvl_variables,
         parse_gvl_declaration,
@@ -189,14 +193,34 @@ def _install_root_logger() -> None:
 # ---------------------------------------------------------------------------
 # 全局状态
 # ---------------------------------------------------------------------------
+def _read_json_file(path: Optional[str]) -> Any:
+    if not path:
+        return None
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _write_json_file(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp, path)
+
+
 @dataclass
 class AppState:
     mcp: Optional[McpClient] = None
     toolkit: Optional[InoToolkit] = None
     current_project: Optional[str] = None
+    version_repo: Optional[ProjectVersionRepo] = None
     busy: Optional[str] = None
     server_proc: Optional[subprocess.Popen] = None
     agent_proc: Optional[subprocess.Popen] = None
+    agent_profile: Optional[str] = None
+    ptlc_fault_file: Optional[str] = None
+    ptlc_state_file: Optional[str] = None
     # Server/Agent 由外部进程管理器（Supervisor、systemd）托管，不由本进程 spawn
     attached: bool = False
     server_client_url: Optional[str] = None
@@ -253,6 +277,8 @@ class AppState:
                 "running": self.attached or _alive(self.agent_proc) is not None,
                 "stopping": "agent_proc" in self.stopping,
                 "attached": self.attached,
+                "profile": self.agent_profile,
+                "ptlc_state": _read_json_file(self.ptlc_state_file),
             },
             "last_extract_csv": self.last_extract_csv,
             "last_extract_count": self.last_extract_count,
@@ -459,6 +485,10 @@ _RELEASE = _read_release()
 _BACKEND_CAPABILITIES = {
     "ptlc_server_profile": True,
     "ptlc_handshake_agent": True,
+    "ptlc_write_ownership": True,
+    "ptlc_behavior_contract": True,
+    "project_version_history": True,
+    "safe_online_deploy": True,
 }
 
 
@@ -486,6 +516,9 @@ async def api_version() -> Dict[str, Any]:
             "/api/project/editables": True,
             "/api/project/warm":      True,
             "/api/project/cache":     True,
+            "/api/project/versions":  True,
+            "/api/project/symbols":   True,
+            "/api/project/deploy/preflight": True,
         },
     }
 
@@ -514,6 +547,7 @@ async def api_project_open(req: OpenReq) -> Dict[str, Any]:
             _STATE.mcp = None
             _STATE.toolkit = None
             _STATE.current_project = None
+            _STATE.version_repo = None
         # 新项目, 清缓存
         _STATE.declarations_dump = None
         _STATE.editables_cache = None
@@ -553,6 +587,12 @@ async def api_project_open(req: OpenReq) -> Dict[str, Any]:
             _STATE.mcp = mcp
             _STATE.toolkit = tk
             _STATE.current_project = proj
+            _STATE.version_repo = ProjectVersionRepo(
+                Path(proj), runtime_data_dir() / "plc-history"
+            )
+            await asyncio.to_thread(
+                _STATE.version_repo.snapshot_if_changed, "首次由 PLC-Sim 打开工程"
+            )
             _STATE.last_error = None
             log.info("项目已打开: %s", proj)
             return {"ok": True, "message": out.strip(), "state": _STATE.snapshot()}
@@ -565,6 +605,7 @@ async def api_project_open(req: OpenReq) -> Dict[str, Any]:
             _STATE.mcp = None
             _STATE.toolkit = None
             _STATE.current_project = None
+            _STATE.version_repo = None
             raise HTTPException(500, err)
         finally:
             _STATE.busy = None
@@ -578,6 +619,7 @@ async def api_project_close() -> Dict[str, Any]:
         _STATE.mcp = None
         _STATE.toolkit = None
         _STATE.current_project = None
+        _STATE.version_repo = None
         _STATE.declarations_dump = None
         _STATE.editables_cache = None
         log.info("已断开 MCP")
@@ -726,7 +768,12 @@ async def api_project_save() -> Dict[str, Any]:
         _STATE.busy = "saving"
         try:
             out = await asyncio.to_thread(tk.save_project)
-            return {"ok": True, "message": out.strip()}
+            version = None
+            if _STATE.version_repo is not None:
+                version = await asyncio.to_thread(
+                    _STATE.version_repo.snapshot_if_changed, "GUI 保存工程"
+                )
+            return {"ok": True, "message": out.strip(), "version": version}
         finally:
             _STATE.busy = None
 
@@ -745,6 +792,30 @@ async def api_project_compile() -> Dict[str, Any]:
 
 class DownloadReq(BaseModel):
     strategy: str = "save_compile"    # 或 "online"
+    confirm_online: bool = False
+    expected_project_sha256: Optional[str] = None
+
+
+def _online_deploy_allowed() -> bool:
+    return os.environ.get("OPCUASIM_ALLOW_ONLINE_DEPLOY", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+@app.get("/api/project/deploy/preflight")
+async def api_project_deploy_preflight() -> Dict[str, Any]:
+    _require_tk()
+    repo = _STATE.version_repo
+    sha = await asyncio.to_thread(repo.current_sha256) if repo else None
+    return {
+        "ok": True,
+        "online_allowed": _online_deploy_allowed(),
+        "project_sha256": sha,
+        "warning": (
+            "online 策略会尝试登录真实 PLC 并执行全量下载；"
+            "save_compile 只保存和编译，不会下装"
+        ),
+    }
 
 
 @app.post("/api/project/download")
@@ -754,11 +825,40 @@ async def api_project_download(req: DownloadReq) -> Dict[str, Any]:
         strat = DownloadStrategy(req.strategy)
     except ValueError:
         raise HTTPException(400, f"未知 strategy: {req.strategy}")
+    if strat == DownloadStrategy.ONLINE_IRONPYTHON:
+        if not _online_deploy_allowed():
+            raise HTTPException(
+                403,
+                "在线下载默认关闭；确认现场安全后设置 OPCUASIM_ALLOW_ONLINE_DEPLOY=true",
+            )
+        if not req.confirm_online:
+            raise HTTPException(400, "在线下载必须显式 confirm_online=true")
     async with _STATE.mcp_lock:
         _STATE.busy = "downloading"
         try:
+            repo = _STATE.version_repo
+            current_sha = await asyncio.to_thread(repo.current_sha256) if repo else None
+            if req.expected_project_sha256 and req.expected_project_sha256 != current_sha:
+                raise HTTPException(409, "工程内容已变化，请重新执行部署预检")
+            version = None
+            if repo is not None:
+                version = await asyncio.to_thread(
+                    repo.snapshot_if_changed,
+                    "在线下载前自动快照" if strat == DownloadStrategy.ONLINE_IRONPYTHON
+                    else "保存编译前自动快照",
+                )
             report = await asyncio.to_thread(tk.download_program, strat)
-            return {"ok": "error" not in report, "report": report}
+            ok = "error" not in report
+            if ok and strat == DownloadStrategy.ONLINE_IRONPYTHON and repo is not None:
+                deployed_sha = await asyncio.to_thread(repo.current_sha256)
+                await asyncio.to_thread(repo.snapshot_if_changed, "在线下载后的工程版本")
+                report["version"] = await asyncio.to_thread(repo.mark_deployed, deployed_sha)
+            report["pre_download_version"] = version
+            report["semantics"] = (
+                "online_full_download" if strat == DownloadStrategy.ONLINE_IRONPYTHON
+                else "save_and_compile_only"
+            )
+            return {"ok": ok, "report": report}
         finally:
             _STATE.busy = None
 
@@ -891,18 +991,129 @@ async def api_pou_set(req: PouSetReq) -> Dict[str, Any]:
         _STATE.busy = "writing_pou"
         result: Dict[str, Any] = {}
         try:
+            if _STATE.version_repo is not None:
+                await asyncio.to_thread(
+                    _STATE.version_repo.snapshot_if_changed,
+                    f"修改 {req.path} 前自动快照",
+                )
             out = await asyncio.to_thread(tk.set_pou_code, req.path,
                                           declaration=req.declaration,
                                           implementation=req.implementation)
             result["set"] = out.strip()
             if req.save:
                 result["save"] = (await asyncio.to_thread(tk.save_project)).strip()
+                if _STATE.version_repo is not None:
+                    result["version"] = await asyncio.to_thread(
+                        _STATE.version_repo.snapshot_if_changed,
+                        f"修改 {req.path}",
+                    )
             if req.compile:
                 cr = await asyncio.to_thread(tk.compile_project)
                 result["compile"] = {"ok": cr.ok, "summary": cr.summary}
             return {"ok": True, **result}
         finally:
             _STATE.busy = None
+
+
+@app.get("/api/project/symbols")
+async def api_project_symbols(path: str = Query(...)) -> Dict[str, Any]:
+    tk = _require_tk()
+    async with _STATE.mcp_lock:
+        raw = await asyncio.to_thread(tk.get_pou_code, path)
+        declaration, _ = _split_pou_output(raw)
+        return {"ok": True, "path": path, "symbols": parse_symbols(declaration)}
+
+
+class SymbolSetReq(BaseModel):
+    path: str
+    name: str
+    enabled: bool
+    compile: bool = False
+
+
+@app.post("/api/project/symbol")
+async def api_project_symbol_set(req: SymbolSetReq) -> Dict[str, Any]:
+    tk = _require_tk()
+    async with _STATE.mcp_lock:
+        if _STATE.version_repo is not None:
+            await asyncio.to_thread(
+                _STATE.version_repo.snapshot_if_changed,
+                f"修改符号 {req.path}/{req.name} 前自动快照",
+            )
+        raw = await asyncio.to_thread(tk.get_pou_code, req.path)
+        declaration, _ = _split_pou_output(raw)
+        try:
+            updated = set_symbol_pragma(declaration, req.name, req.enabled)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        await asyncio.to_thread(
+            tk.set_pou_code, req.path, declaration=updated, implementation=None
+        )
+        await asyncio.to_thread(tk.save_project)
+        compile_result = None
+        if req.compile:
+            result = await asyncio.to_thread(tk.compile_project)
+            compile_result = {"ok": result.ok, "summary": result.summary}
+        version = None
+        if _STATE.version_repo is not None:
+            version = await asyncio.to_thread(
+                _STATE.version_repo.snapshot_if_changed,
+                f"符号 {req.name}={'on' if req.enabled else 'off'}",
+            )
+        return {
+            "ok": compile_result is None or compile_result["ok"],
+            "path": req.path,
+            "name": req.name,
+            "enabled": req.enabled,
+            "compile": compile_result,
+            "version": version,
+        }
+
+
+@app.get("/api/project/versions")
+async def api_project_versions() -> Dict[str, Any]:
+    _require_tk()
+    if _STATE.version_repo is None:
+        return {"ok": True, "items": []}
+    return {"ok": True, "items": await asyncio.to_thread(_STATE.version_repo.history)}
+
+
+@app.get("/api/project/versions/{rev}/download")
+async def api_project_version_download(rev: str) -> FileResponse:
+    _require_tk()
+    if _STATE.version_repo is None:
+        raise HTTPException(404, "工程版本库未启用")
+    try:
+        path = await asyncio.to_thread(_STATE.version_repo.version_path, rev)
+    except KeyError as exc:
+        raise HTTPException(404, f"工程版本不存在: {rev}") from exc
+    return FileResponse(path, filename=f"{Path(_STATE.current_project or 'plc').stem}-{rev}.project")
+
+
+class VersionRestoreReq(BaseModel):
+    confirm: bool = False
+
+
+@app.post("/api/project/versions/{rev}/restore")
+async def api_project_version_restore(rev: str, req: VersionRestoreReq) -> Dict[str, Any]:
+    if not req.confirm:
+        raise HTTPException(400, "恢复二进制工程必须显式 confirm=true")
+    _require_tk()
+    async with _STATE.mcp_lock:
+        repo = _STATE.version_repo
+        if repo is None:
+            raise HTTPException(404, "工程版本库未启用")
+        # InoProShop 持有二进制工程时禁止外部替换；先完整关闭会话再原子恢复。
+        if _STATE.mcp is not None:
+            await asyncio.to_thread(_STATE.mcp.close)
+        _STATE.mcp = None
+        _STATE.toolkit = None
+        _STATE.current_project = None
+        _STATE.version_repo = None
+        _STATE.declarations_dump = None
+        _STATE.editables_cache = None
+        result = await asyncio.to_thread(repo.restore, rev)
+        return {"ok": True, **result, "reopen_required": True}
 
 
 # -- Server / Agent 子进程 -------------------------------------------------
@@ -1316,6 +1527,8 @@ async def api_server_variables(
             "english_name": node_def.name_en,
             "data_type": node_def.data_type,
             "array_len": node_def.array_len,
+            "write_owner": node_def.write_owner,
+            "writable": node_def.write_owner != "plc",
             "node_id": node_def.node_id,
             "value": value,
         }
@@ -1363,6 +1576,8 @@ async def api_server_variables_read(req: ServerVariablesReadReq) -> Dict[str, An
             "english_name": node_def.name_en,
             "data_type": node_def.data_type,
             "array_len": node_def.array_len,
+            "write_owner": node_def.write_owner,
+            "writable": node_def.write_owner != "plc",
             "node_id": node_def.node_id,
             "value": value,
         }
@@ -1375,6 +1590,7 @@ class ServerVariableWriteReq(BaseModel):
     node_id: str
     value: Any
     index: Optional[int] = Field(default=None, ge=0)
+    maintenance_override: bool = False
 
 
 @app.post("/api/server/variable")
@@ -1387,6 +1603,12 @@ async def api_server_variable_write(req: ServerVariableWriteReq) -> Dict[str, An
     )
     if node_def is None:
         raise HTTPException(404, "变量不在当前 Server 的 CSV 定义中")
+    if node_def.write_owner == "plc" and not req.maintenance_override:
+        raise HTTPException(
+            409,
+            f"{node_def.name_cn} 是 PLC 输出，只能由握手/行为代理写入；"
+            "如确需人工诊断，请显式启用维护写入",
+        )
     try:
         if req.index is not None:
             if not node_def.array_len:
@@ -1437,6 +1659,8 @@ async def api_server_variable_write(req: ServerVariableWriteReq) -> Dict[str, An
         "name": node_def.name_cn,
         "data_type": node_def.data_type,
         "array_len": node_def.array_len,
+        "write_owner": node_def.write_owner,
+        "writable": node_def.write_owner != "plc",
         "index": req.index,
         "element_value": element_value,
         "value": confirmed,
@@ -1454,6 +1678,7 @@ class AgentStartReq(BaseModel):
     pump: Optional[int] = Field(default=None, ge=1, le=3)
     delay_ms: Optional[int] = Field(default=None, ge=0, le=3_600_000)
     poll_ms: Optional[int] = Field(default=None, ge=5, le=60_000)
+    time_scale: Optional[float] = Field(default=None, gt=0, le=1000)
     s09_remaining_volume_ml: Optional[float] = Field(default=None, gt=0)
     s07_balance_reading: Optional[float] = None
     s09_balance_reading: Optional[float] = None
@@ -1493,6 +1718,9 @@ def _extend_ptlc_command(cmd: List[str], req: AgentStartReq) -> Dict[str, Any]:
         if value is not None:
             options[field_name] = value
             cmd.extend([flag, str(value)])
+    if req.time_scale is not None:
+        options["time_scale"] = req.time_scale
+        cmd.extend(["--time-scale", str(req.time_scale)])
     return options
 
 
@@ -1521,12 +1749,25 @@ async def api_agent_start(req: AgentStartReq) -> Dict[str, Any]:
         if profile == "ptlc"
         else _extend_szlab_command(cmd, req)
     )
+    if profile == "ptlc":
+        runtime_root = runtime_data_dir() / "runtime"
+        fault_file = runtime_root / "ptlc-faults.json"
+        state_file = runtime_root / "ptlc-state.json"
+        if not fault_file.exists():
+            _write_json_file(fault_file, {})
+        cmd.extend(["--fault-file", str(fault_file), "--state-file", str(state_file)])
+        _STATE.ptlc_fault_file = str(fault_file)
+        _STATE.ptlc_state_file = str(state_file)
+    else:
+        _STATE.ptlc_fault_file = None
+        _STATE.ptlc_state_file = None
 
     log.info("启动 Handshake Agent: %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             cwd=str(_ROOT), bufsize=0, env=_python_subprocess_env())
     _pipe_to_logger(proc, "agent")
     _STATE.agent_proc = proc
+    _STATE.agent_profile = profile
     await asyncio.sleep(0.3)
     return {
         "ok": True,
@@ -1540,7 +1781,51 @@ async def api_agent_start(req: AgentStartReq) -> Dict[str, Any]:
 async def api_agent_stop() -> Dict[str, Any]:
     if _STATE.attached:
         raise HTTPException(400, "外部 Agent 由进程管理器托管，请在 Supervisor 侧停止")
-    return await _stop_subprocess("agent_proc")
+    result = await _stop_subprocess("agent_proc")
+    _STATE.agent_profile = None
+    return result
+
+
+class PtlcFaultReq(BaseModel):
+    station: str
+    action_code: int
+    outcome: str = "done"
+
+
+@app.get("/api/agent/ptlc/state")
+async def api_ptlc_agent_state() -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "running": bool(_STATE.agent_proc and _STATE.agent_proc.poll() is None),
+        "state": _read_json_file(_STATE.ptlc_state_file),
+        "faults": _read_json_file(_STATE.ptlc_fault_file) or {},
+    }
+
+
+@app.post("/api/agent/ptlc/fault")
+async def api_ptlc_agent_fault(req: PtlcFaultReq) -> Dict[str, Any]:
+    if req.station not in {
+        "Sampling", "Collect", "Develop", "PhotoScrape",
+        "FeedLift", "Pump", "Rail", "StagingA",
+    }:
+        raise HTTPException(400, f"未知 PTLC 工位: {req.station}")
+    outcome = req.outcome.strip().lower()
+    if outcome not in {"done", "reject", "error", "hang", "interrupt", "clear"}:
+        raise HTTPException(400, f"未知故障结果: {req.outcome}")
+    path = Path(_STATE.ptlc_fault_file) if _STATE.ptlc_fault_file else (
+        runtime_data_dir() / "runtime" / "ptlc-faults.json"
+    )
+    payload = _read_json_file(str(path)) or {}
+    station_faults = payload.setdefault(req.station, {})
+    if outcome == "clear" or outcome == "done":
+        station_faults.pop(str(req.action_code), None)
+    else:
+        station_faults[str(req.action_code)] = outcome
+    if not station_faults:
+        payload.pop(req.station, None)
+    await asyncio.to_thread(_write_json_file, path, payload)
+    _STATE.ptlc_fault_file = str(path)
+    return {"ok": True, "faults": payload}
 
 
 # -- SSE 日志流 ------------------------------------------------------------

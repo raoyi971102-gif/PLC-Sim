@@ -47,11 +47,12 @@
       <span class="action-divider" aria-hidden="true"></span>
       <button id="btnSave" class="btn">保存</button>
       <button id="btnCompile" class="btn">编译</button>
+      <button id="btnVersions" class="btn">版本历史</button>
       <select id="dlStrategy" class="compact-select" aria-label="下载策略">
-        <option value="0">全量下载</option>
-        <option value="1">增量下载</option>
+        <option value="save_compile">保存并编译（不下装）</option>
+        <option value="online">在线全量下载（危险）</option>
       </select>
-      <button id="btnDownload" class="btn">下载至 PLC</button>
+      <button id="btnDownload" class="btn">执行所选操作</button>
     </div>
   </section>
 
@@ -225,6 +226,7 @@
             <div class="heading-actions">
               <span id="setPouResult" class="inline-result">尚未提交修改</span>
               <button id="btnSetPou" class="btn primary">应用修改</button>
+              <button id="btnPouSymbols" class="btn">符号导出</button>
             </div>
           </div>
         </article>
@@ -397,7 +399,34 @@
               </div>
             </details>
             <div id="ptlcAgentHint" class="field full hidden">
-              <span>PTLC 模式响应 8 个 L2 工位，并启用到位镜像、地轨数组索引和展缸 50/51 副作用。</span>
+              <span>PTLC 模式响应 8 个 L2 工位，并启用动作契约、连续运动、部署 FSM 和工艺副作用。</span>
+              <div class="form-grid">
+                <label class="field">
+                  <span>仿真时间倍率</span>
+                  <input id="agentTimeScale" type="number" value="1" min="0.01" max="1000" step="0.1">
+                </label>
+                <label class="field">
+                  <span>故障工位</span>
+                  <select id="ptlcFaultStation">
+                    <option>Sampling</option><option>Collect</option><option>Develop</option>
+                    <option>PhotoScrape</option><option>FeedLift</option><option>Pump</option>
+                    <option>Rail</option><option>StagingA</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>动作码</span>
+                  <input id="ptlcFaultCode" type="number" value="10" step="1">
+                </label>
+                <label class="field">
+                  <span>运行期结果</span>
+                  <select id="ptlcFaultOutcome">
+                    <option value="clear">正常/清除</option>
+                    <option value="reject">拒绝</option><option value="error">错误</option>
+                    <option value="hang">卡死</option><option value="interrupt">中断</option>
+                  </select>
+                </label>
+              </div>
+              <button id="btnPtlcFault" class="btn small" type="button">应用运行期故障</button>
             </div>
           </div>
           <div class="card-actions">
@@ -450,6 +479,10 @@
             <label class="compact-check monitor-auto">
               <input id="monitorAutoRefresh" type="checkbox" checked>
               自动刷新
+            </label>
+            <label class="compact-check" title="允许人工改写 PLC 输出，仅限故障诊断">
+              <input id="monitorMaintenanceOverride" type="checkbox">
+              维护写入
             </label>
             <select id="monitorRefreshInterval" class="compact-select" aria-label="监控刷新周期">
               <option value="1000">每 1 秒</option>

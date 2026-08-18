@@ -10,6 +10,11 @@ gvl_path:
 stations: [Sampling, Collect, Develop, PhotoScrape, FeedLift, Pump, Rail, StagingA]
 delay_ms: 200
 poll_ms: 20
+time_scale: 1.0
+deploy_prepare_ms: 40
+
+# 八工位合法动作码、步序和错误码的自包含快照。未知动作一律 101 REJECTED。
+behavior_dir: config/ptlc_behavior
 
 # 模拟一台已经完成启动、总线正常的 PLC。
 initial_values:
@@ -17,6 +22,29 @@ initial_values:
   PLC_Startup_ErrorCode: 0
   PLC_Ready: true
   PLC_Axis_CommOperational: [true, true, true, true, true, true, true, true, true, true, true]
+  Pump_Vacuum_On: false
+  Tank_Drain_S: 0.20
+  Tank_Drain_Cap_S: 0.50
+  Tank_Blow_S: 0.10
+  Tank_Dry_S: 0.05
+
+# P1 连续运动近似：按距离/速度推进 ActPos，动作完成前持续更新 L2 Step。
+motion_speed:
+  Sampling: 250.0
+  PhotoScrape: 180.0
+motion_effects:
+  Sampling:
+    - {from: Sampling_4X_Target, to: Sampling_4X_ActPos}
+    - {from: Sampling_3Y_Target, to: Sampling_3Y_ActPos}
+    - {from: Sampling_5Z_Target, to: Sampling_5Z_ActPos}
+  PhotoScrape:
+    - {from: Spot_7Y_Target, to: Spot_7Y_ActPos}
+    - {from: Photo_8Y_Target, to: Photo_8Y_ActPos}
+    - {from: PhotoScrape_Align_TargetX, to: PhotoScrape_9X_ActPos}
+    - {from: PhotoScrape_Align_TargetZ, to: PhotoScrape_10Z_ActPos}
+
+process:
+  material: {feed_count: 12, waste_count: 0}
 
 # 正常完成后的通用到位镜像。
 station_effects:

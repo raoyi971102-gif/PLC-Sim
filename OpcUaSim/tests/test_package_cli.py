@@ -81,7 +81,7 @@ def test_runtime_command_uses_python_script_in_source_mode(monkeypatch):
 
     assert command == [
         "/venv/bin/python",
-        "/checkout/server.py",
+        str(Path("/checkout/server.py")),
         "--port",
         "4855",
     ]

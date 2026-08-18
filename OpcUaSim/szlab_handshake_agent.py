@@ -1680,6 +1680,15 @@ class WorkflowHandshakeSimulator:
         if task in (19, 20):
             product_type = int(self.adapter.read(S09_TRANSFER_PRODUCT) or 0)
             position = int(self.adapter.read(S09_TRANSFER_POSITION) or 0)
+            if (
+                self.workflow == BEAKER_TRANSFER_CHAIN_WORKFLOW
+                and product_type == 3
+                and position == 1
+            ):
+                # 五工位烧杯搬运没有后续 REAGENT1 放瓶动作，可把 NO[7] 当作该
+                # 专用场景的站内见证；其它工作流仍走 s09_transfer_sensor 的空见证，
+                # 避免烧杯状态污染试剂瓶库位。
+                return position, S09_STATION_SENSOR[1]
             return position, s09_transfer_sensor(product_type, position)
         if task in (21, 22):
             position = int(self.adapter.read(S10_ROBOT_POSITION) or 0)

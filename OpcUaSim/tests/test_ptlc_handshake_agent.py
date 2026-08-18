@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from ptlc_handshake_agent import OUTPUT_DEFAULTS, PtlcHandshakeSimulator
 
 
@@ -53,7 +55,7 @@ def test_l2_cycle_accepts_completes_applies_rail_effect_and_rearms() -> None:
     sim = PtlcHandshakeSimulator(adapter, config=config, delay_s=0.1)
     sim.initialize()
     values.update({
-        "Rail_L2_ActionCode": 1,
+        "Rail_L2_ActionCode": 10,
         "Rail_L2_RequestSeq": 17,
         "Rail_L2_Start": True,
     })
@@ -104,12 +106,12 @@ def test_fault_injection_rejects_and_reset_returns_idle() -> None:
     values = _station_values("Pump")
     config = {
         "stations": ["Pump"],
-        "faults": {"Pump": {"reject_codes": [9]}},
+        "faults": {"Pump": {"reject_codes": [10]}},
     }
     sim = PtlcHandshakeSimulator(MemoryAdapter(values), config=config, delay_s=0)
     sim.initialize()
     values.update({
-        "Pump_L2_ActionCode": 9,
+        "Pump_L2_ActionCode": 10,
         "Pump_L2_RequestSeq": 8,
         "Pump_L2_Start": True,
     })
@@ -142,7 +144,7 @@ def test_global_ready_gate_rejects_with_protocol_error_190() -> None:
     assert values["Sampling_L2_Retryable"] is True
 
 
-def test_invalid_effect_index_becomes_l2_error_instead_of_crashing_agent() -> None:
+def test_rail_position_gate_rejects_invalid_index_before_motion() -> None:
     values = {
         **_station_values("Rail"),
         "Rail_Target_Position": 9,
@@ -159,10 +161,145 @@ def test_invalid_effect_index_becomes_l2_error_instead_of_crashing_agent() -> No
     sim = PtlcHandshakeSimulator(MemoryAdapter(values), config=config, delay_s=0)
     sim.initialize()
     values.update({
-        "Rail_L2_ActionCode": 1,
+        "Rail_L2_ActionCode": 10,
         "Rail_L2_RequestSeq": 7,
         "Rail_L2_Start": True,
     })
-    assert [event.phase for event in sim.step(now=5.0)] == ["accepted", "error"]
-    assert values["Rail_L2_State"] == 40
-    assert values["Rail_L2_ErrorCode"] == 500
+    assert [event.phase for event in sim.step(now=5.0)] == ["accepted", "rejected"]
+    assert values["Rail_L2_State"] == 30
+    assert values["Rail_L2_ErrorCode"] == 101
+
+
+def test_unknown_action_is_rejected_with_dispatcher_error_101() -> None:
+    values = _station_values("Rail")
+    sim = PtlcHandshakeSimulator(
+        MemoryAdapter(values), config={"stations": ["Rail"]}, delay_s=0
+    )
+    sim.initialize()
+    values.update({
+        "Rail_L2_ActionCode": 999,
+        "Rail_L2_RequestSeq": 12,
+        "Rail_L2_Start": True,
+    })
+    assert [event.phase for event in sim.step(now=1.0)] == ["accepted", "rejected"]
+    assert values["Rail_L2_ErrorCode"] == 101
+    assert values["Rail_L2_Retryable"] is True
+
+
+def test_runtime_fault_can_interrupt_a_valid_action() -> None:
+    values = _station_values("Pump")
+    sim = PtlcHandshakeSimulator(
+        MemoryAdapter(values), config={"stations": ["Pump"]}, delay_s=0
+    )
+    sim.runtime_faults.set("Pump", 10, "interrupt")
+    sim.initialize()
+    values.update({
+        "Pump_L2_ActionCode": 10,
+        "Pump_L2_RequestSeq": 13,
+        "Pump_L2_Start": True,
+    })
+    assert [event.phase for event in sim.step(now=2.0)] == ["accepted", "interrupted"]
+    assert values["Pump_L2_State"] == 50
+    assert values["Pump_L2_ErrorCode"] == 202
+
+
+def test_deploy_fsm_prepares_commits_and_requires_fail_closed_reset() -> None:
+    values = {
+        **_station_values("Rail"),
+        "PLC_Axis_CommOperational": [True] * 11,
+        "PLC_Deploy_RequestSeq": 7,
+        "PLC_Deploy_CommitSeq": 0,
+        "PLC_Deploy_Start": True,
+        "PLC_Deploy_Reset": False,
+        "PLC_Deploy_AcceptedSeq": 0,
+        "PLC_Deploy_ErrorCode": 0,
+    }
+    sim = PtlcHandshakeSimulator(
+        MemoryAdapter(values),
+        config={"stations": ["Rail"], "deploy_prepare_ms": 20},
+        delay_s=0,
+    )
+    sim.initialize()
+    sim.step(now=10.0)
+    assert values["PLC_Deploy_State"] == 10
+    assert values["PLC_Deploy_AcceptedSeq"] == 7
+    sim.step(now=10.02)
+    assert values["PLC_Deploy_State"] == 20
+    values["PLC_Deploy_CommitSeq"] = 7
+    sim.step(now=10.03)
+    assert values["PLC_Deploy_State"] == 25
+    values["PLC_Axis_CommOperational"][3] = False
+    sim.step(now=10.04)
+    assert values["PLC_Deploy_State"] == 25
+    assert values["PLC_Deploy_ErrorCode"] == 5
+    values.update({
+        "PLC_Deploy_Start": False,
+        "PLC_Deploy_CommitSeq": 0,
+        "PLC_Deploy_Reset": True,
+    })
+    sim.step(now=10.05)
+    assert values["PLC_Deploy_State"] == 0
+
+
+def test_motion_progresses_continuously_before_done() -> None:
+    values = {
+        **_station_values("Sampling"),
+        "Sampling_4X_Target": 10.0,
+        "Sampling_4X_ActPos": 0.0,
+    }
+    sim = PtlcHandshakeSimulator(
+        MemoryAdapter(values),
+        config={
+            "stations": ["Sampling"],
+            "motion_speed": {"Sampling": 10.0},
+            "motion_effects": {"Sampling": [{
+                "from": "Sampling_4X_Target", "to": "Sampling_4X_ActPos",
+            }]},
+        },
+        delay_s=0,
+    )
+    sim.initialize()
+    values.update({
+        "Sampling_L2_ActionCode": 10,
+        "Sampling_L2_RequestSeq": 20,
+        "Sampling_L2_Start": True,
+    })
+    assert [event.phase for event in sim.step(now=0.0)] == ["accepted"]
+    assert sim.step(now=0.5) == []
+    assert values["Sampling_4X_ActPos"] == pytest.approx(5.0)
+    assert [event.phase for event in sim.step(now=1.0)] == ["completed"]
+    assert values["Sampling_4X_ActPos"] == pytest.approx(10.0)
+
+
+def test_tank_drain_runs_phases_and_updates_native_array() -> None:
+    values = {
+        **_station_values("Develop"),
+        "Expand_Target_Tank": 2,
+        "Tank_State": [0] * 8,
+        "Tank_Drain_Enable": [False] * 8,
+        "Tank_Drain_Done": [False] * 8,
+        "Tank_Drain_CapHit": [False] * 8,
+        "Tank_Drain_S": 0.2,
+        "Tank_Drain_Cap_S": 0.5,
+        "Tank_Blow_S": 0.1,
+        "Tank_Dry_S": 0.1,
+    }
+    sim = PtlcHandshakeSimulator(
+        MemoryAdapter(values), config={"stations": ["Develop"]}, delay_s=0
+    )
+    sim.initialize()
+    values.update({
+        "Develop_L2_ActionCode": 50,
+        "Develop_L2_RequestSeq": 21,
+        "Develop_L2_Start": True,
+    })
+    assert [event.phase for event in sim.step(now=0.0)] == ["accepted"]
+    assert values["Tank_State"][1] == 50
+    sim.step(now=0.25)
+    assert values["Tank_State"][1] == 55
+    sim.step(now=0.35)
+    assert values["Tank_State"][1] == 56
+    assert [event.phase for event in sim.step(now=0.4)] == ["completed"]
+    assert values["Tank_State"][1] == 98
+    assert values["Tank_Drain_Enable"][1] is False
+    assert values["Tank_Drain_Done"][1] is True

@@ -37,7 +37,7 @@ def test_ptlc_nested_gvl_array_and_l2_cycle_through_real_opcua() -> None:
         assert adapter.read("PLC_Axis_CommOperational") == [True] * 11
         adapter.write("Rail_Pos_Target", [1.0, 12.5, 20.0, 30.0, 40.0, 50.0])
         adapter.write("Rail_Target_Position", 2)
-        adapter.write("Rail_L2_ActionCode", 1)
+        adapter.write("Rail_L2_ActionCode", 10)
         adapter.write("Rail_L2_RequestSeq", 99)
         adapter.write("Rail_L2_Start", True)
 

@@ -129,15 +129,15 @@ def test_szlab_agent_options_are_forwarded_to_cli() -> None:
 def test_ptlc_agent_only_forwards_generic_timing_options() -> None:
     req = AgentStartReq(
         profile="ptlc", workflow="unknown_szlab_workflow",
-        delay_ms=75, poll_ms=10, position=4,
+        delay_ms=75, poll_ms=10, time_scale=5, position=4,
     )
     cmd = ["python", "ptlc_handshake_agent.py"]
     options = _extend_ptlc_command(cmd, req)
     assert cmd == [
         "python", "ptlc_handshake_agent.py",
-        "--delay-ms", "75", "--poll-ms", "10",
+        "--delay-ms", "75", "--poll-ms", "10", "--time-scale", "5.0",
     ]
-    assert options == {"delay_ms": 75, "poll_ms": 10}
+    assert options == {"delay_ms": 75, "poll_ms": 10, "time_scale": 5.0}
 
 
 def test_ptlc_profiles_are_selectable_in_gui() -> None:
@@ -154,6 +154,10 @@ def test_ptlc_profiles_are_selectable_in_gui() -> None:
     assert capabilities == {
         "ptlc_server_profile": True,
         "ptlc_handshake_agent": True,
+        "ptlc_write_ownership": True,
+        "ptlc_behavior_contract": True,
+        "project_version_history": True,
+        "safe_online_deploy": True,
     }
 
 

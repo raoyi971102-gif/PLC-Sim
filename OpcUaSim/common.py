@@ -147,6 +147,9 @@ class NodeDef:
     array_len: int = 0    # 0=标量，>0=固定长度真数组
     browse_path: Tuple[str, ...] = ()  # Objects 下的父对象 BrowseName 路径
     initial_value: Any = None
+    # 写所有权只约束 PLC-Sim 的维护 API，不改变 OPC UA AccessLevel。握手代理代表
+    # PLC 扫描逻辑，仍须能写 PLC 输出；普通 GUI 则不得成为第二个 PLC 输出写者。
+    write_owner: str = "shared"  # shared / host / plc / maintenance
 
 
 def node_defs_fingerprint(nodes: Sequence[NodeDef]) -> str:
@@ -164,6 +167,7 @@ def node_defs_fingerprint(nodes: Sequence[NodeDef]) -> str:
             node.data_type,
             node.array_len,
             node.browse_path,
+            node.write_owner,
         )
         for node in nodes
     )
@@ -270,18 +274,65 @@ def load_ptlc_nodes(path: Path, ns_index: int = 4) -> List[NodeDef]:
         if array_len < 0:
             raise ValueError(f"PTLC 节点 {name} 的 array_len 不能为负数")
         initial = spec.get("initial_value")
+        comment = str(spec.get("comment", ""))
         result.append(NodeDef(
             name_cn=str(name),
-            name_en=str(spec.get("comment", "")),
+            name_en=comment,
             node_type="VARIABLE",
             data_type=data_type,
             node_id=f"ns={ns_index};s=ptlc|{name}",
             array_len=array_len,
             browse_path=browse_path,
             initial_value=initial,
+            write_owner=str(spec.get("write_owner") or _infer_ptlc_write_owner(
+                str(name), comment
+            )),
         ))
     log.info("PTLC 节点表解析完成：%d 个节点，GVL=%s", len(result), "/".join(browse_path))
     return result
+
+
+_PTLC_L2_HOST_FIELDS = frozenset({"ActionCode", "RequestSeq", "Start", "Reset"})
+_PTLC_L2_PLC_FIELDS = frozenset({
+    "State", "ActiveCode", "AcceptedSeq", "CompletedSeq", "Step",
+    "ErrorCode", "SafeState", "Retryable",
+})
+
+
+def _infer_ptlc_write_owner(name: str, comment: str) -> str:
+    """从 PTLC 稳定命名/注释推导 GUI 写所有权。
+
+    未明确归属的变量保留 ``maintenance``，避免把历史调试量误判为业务输入；
+    CSV/SZLab 路径不调用本函数，继续维持原来的完全可写行为。
+    """
+    l2_match = re.match(
+        r"^(Sampling|Collect|Develop|PhotoScrape|FeedLift|Pump|Rail|StagingA)_L2_(.+)$",
+        name,
+    )
+    if l2_match:
+        field = l2_match.group(2)
+        if field in _PTLC_L2_HOST_FIELDS:
+            return "host"
+        if field in _PTLC_L2_PLC_FIELDS:
+            return "plc"
+    if name in {
+        "PLC_Deploy_RequestSeq", "PLC_Deploy_CommitSeq",
+        "PLC_Deploy_Start", "PLC_Deploy_Reset",
+    }:
+        return "host"
+    if name in {
+        "PLC_Deploy_State", "PLC_Deploy_AcceptedSeq", "PLC_Deploy_ErrorCode",
+        "PLC_Startup_State", "PLC_Startup_ErrorCode", "PLC_Ready",
+        "PLC_Startup_AlarmInhibit", "PLC_HandWheel_Active",
+        "PLC_Axis_CommOperational", "PLC_Axis_FaultSource", "PLC_Axis_FaultCode",
+    }:
+        return "plc"
+    normalized = comment.replace("：", ":").replace("仅 ", "仅")
+    if re.search(r"(?:仅)?(?:PC|PC/HMI|上位机|请求方)\s*写", normalized, re.I):
+        return "host"
+    if re.search(r"(?:仅)?PLC\s*写", normalized, re.I):
+        return "plc"
+    return "maintenance"
 
 
 def load_csvs(csv_paths: List[Path]) -> List[NodeDef]:

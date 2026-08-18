@@ -262,14 +262,49 @@ Server 会创建
 `Objects/DeviceSet/Inovance-ARM-Linux/Resources/Application/GlobalVars/Host_Computer`
 嵌套 GVL，支持 Boolean、Byte、Int16、Int32、Float、Double、String 以及固定长度真数组。
 代理响应 Sampling、Collect、Develop、PhotoScrape、FeedLift、Pump、Rail、StagingA
-八个统一 L2 通道，并支持 Ready/Deploy 全局门、故障码注入、轴到位镜像、地轨数组
-索引和 Develop 50/51 展缸副作用。GUI 中分别把节点模型和代理类型切换为 PTLC 即可。
+八个统一 L2 通道。`config/ptlc_behavior/` 固化各工位合法动作码、步序和错误码；
+未知动作按对应派发器错误码 REJECTED，不再默认成功。代理还提供完整
+`PLC_Deploy_*` PREPARING/SAFE/COMMITTED 状态机、连续轴位置推进、地轨数组索引、
+Develop 50/55/56/98 排液过程、Pump/FeedLift 过程状态和确定性事件快照。
+
+GUI 中分别把节点模型和代理类型切换为 PTLC 即可。PLC 输出默认禁止从在线变量栏
+写入，避免 GUI 与握手代理形成双写者；只有显式勾选“维护写入”才可临时覆盖。
+PTLC 代理支持时间倍率，并可在 GUI 运行期按工位/动作码注入
+`reject/error/hang/interrupt`。命令行也可使用：
+
+```bash
+opcua-sim ptlc-handshake --time-scale 10 \
+  --fault-file data/runtime/ptlc-faults.json \
+  --state-file data/runtime/ptlc-state.json
+```
 
 如需核对参考仓库漂移，可在测试环境设置 `PTLC_REFERENCE_ROOT` 指向 PTLC V2 仓库根目录：
 
 ```bash
 PTLC_REFERENCE_ROOT=/path/to/pTLC_platformUI pytest tests/test_ptlc_contract.py
 ```
+
+刷新节点和八份行为规格快照：
+
+```bash
+python tools/snapshot_ptlc_profile.py \
+  /path/to/pTLC_platformUI/eit_ptlc/config/plc_nodes.yaml config/ptlc_nodes.yaml \
+  --behavior-source /path/to/pTLC_platformUI/eit_ptlc/mock/behavior/specs \
+  --behavior-destination config/ptlc_behavior
+```
+
+## PLC 工程版本、符号与安全下载
+
+打开 `.project` 后，PLC-Sim 会在运行数据目录的 `plc-history/` 下建立按工程隔离的
+全量内容寻址快照。保存、POU 修改、符号 pragma 修改和下载前都会自动留档；API 支持
+列出、下载及校验后恢复历史版本。恢复前会关闭 InoProShop MCP 会话，完成后需重新开工程。
+
+“符号导出”可逐变量增删 `{attribute 'symbol' := 'readwrite'}`，并可立即编译验证。
+下载策略有明确区别：
+
+- `save_compile`：只保存并编译，绝不登录 PLC；
+- `online`：尝试真实全量下载，默认关闭。必须设置
+  `OPCUASIM_ALLOW_ONLINE_DEPLOY=true`，通过工程 SHA256 预检，并在 GUI 二次确认。
 
 ## SZLab Poly Studio 握手仿真
 
@@ -504,5 +539,6 @@ OpcUaSim/
 
 - OPC UA Server 默认允许匿名访问且使用 `NoSecurity`，仅适合开发、测试或受控网络。
 - `0.0.0.0` 会监听所有网卡；只需本机使用时可传 `--host 127.0.0.1`。
-- MCP 的在线下载属于非幂等设备操作；当前工具的可靠路径仍是保存和编译，真实下载
-  前应在 InoProShop 中确认目标设备与工程版本。
+- MCP 的在线下载属于非幂等设备操作；后端默认拒绝，只有显式安全门、预检 SHA 和
+  二次确认全部满足才会尝试。IronPython 在线接口仍受 InoProShop SP11 能力限制，
+  返回结果未包含 `ONLINE_DOWNLOAD_OK` 时一律视为未确认成功，不得自动重试。

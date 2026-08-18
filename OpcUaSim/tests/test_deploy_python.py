@@ -5,6 +5,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+
+requires_unix_shell = pytest.mark.skipif(
+    os.name == "nt",
+    reason="ensure_deploy_venv.sh 是 Unix 部署脚本，Windows 由 setup_venv.bat 覆盖",
+)
+
 
 PROJECT_DIRECTORY = Path(__file__).parents[1]
 REPOSITORY_DIRECTORY = PROJECT_DIRECTORY.parent
@@ -41,6 +49,7 @@ def _write_fake_python(path: Path, *, version: str, accept_version_check: bool) 
     path.chmod(0o755)
 
 
+@requires_unix_shell
 def test_deploy_migrates_an_old_venv_atomically(tmp_path: Path) -> None:
     (tmp_path / "requirements.txt").write_text("", encoding="utf-8")
     old_python = tmp_path / ".venv" / "bin" / "python"
@@ -69,6 +78,7 @@ def test_deploy_migrates_an_old_venv_atomically(tmp_path: Path) -> None:
     assert "Previous environment retained temporarily" in result.stdout
 
 
+@requires_unix_shell
 def test_deploy_preserves_old_venv_when_staging_fails(tmp_path: Path) -> None:
     (tmp_path / "requirements.txt").write_text("", encoding="utf-8")
     old_python = tmp_path / ".venv" / "bin" / "python"

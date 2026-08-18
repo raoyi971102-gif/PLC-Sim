@@ -271,8 +271,29 @@ $("btnCompile").onclick = async () => {
 $("btnDownload").onclick = async () => {
   const strategy = $("dlStrategy").value;
   try {
-    const r = await post("/api/project/download", { strategy });
+    const payload = { strategy };
+    if (strategy === "online") {
+      const preflight = await get("/api/project/deploy/preflight");
+      if (!preflight.online_allowed) throw new Error(
+        "在线下载后端安全门未开启。请确认现场后设置 OPCUASIM_ALLOW_ONLINE_DEPLOY=true"
+      );
+      if (!confirm(preflight.warning + "\n\n工程 SHA256:\n" + preflight.project_sha256)) return;
+      payload.confirm_online = true;
+      payload.expected_project_sha256 = preflight.project_sha256;
+    }
+    const r = await post("/api/project/download", payload);
     alert("下载报告:\n" + JSON.stringify(r.report, null, 2));
+  } catch (e) { alert(e.message); }
+};
+
+$("btnVersions").onclick = async () => {
+  try {
+    const r = await get("/api/project/versions");
+    const lines = (r.items || []).map(item =>
+      `${item.rev}  ${String(item.sha256).slice(0, 12)}  ${item.message || ""}` +
+      `${item.deployed_at ? "  [已部署]" : ""}`
+    );
+    alert(lines.length ? lines.join("\n") : "当前工程还没有版本快照");
   } catch (e) { alert(e.message); }
 };
 
@@ -560,6 +581,30 @@ $("btnSetPou").onclick = async () => {
     showResult($("setPouResult"), r.ok, JSON.stringify(r, null, 2));
   } catch (e) { showResult($("setPouResult"), false, e.message); }
 };
+$("btnPouSymbols").onclick = async () => {
+  const path = $("pouPath").value.trim();
+  if (!path) return alert("请先选择 POU/GVL 路径");
+  try {
+    const catalog = await get("/api/project/symbols?path=" + encodeURIComponent(path));
+    const summary = (catalog.symbols || []).map(item =>
+      `${item.exported ? "✓" : "○"} ${item.name}: ${item.type}`
+    ).join("\n");
+    const name = prompt("当前符号:\n" + summary + "\n\n输入要切换的变量名");
+    if (!name) return;
+    const current = (catalog.symbols || []).find(item => item.name === name);
+    if (!current) throw new Error("声明中没有变量: " + name);
+    const enabled = confirm(
+      `${name} 当前${current.exported ? "已" : "未"}导出。\n` +
+      `确定将其设为${current.exported ? "不导出" : "读写导出"}吗？`
+    ) ? !current.exported : current.exported;
+    if (enabled === current.exported) return;
+    const result = await post("/api/project/symbol", {
+      path, name, enabled, compile: $("chkSetCompile").checked,
+    });
+    alert(JSON.stringify(result, null, 2));
+    await readPouByPath(path);
+  } catch (e) { alert(e.message); }
+};
 
 // ---------------- Tab: Sim ----------------
 function syncServerProfile() {
@@ -715,6 +760,7 @@ function setAgentFormDisabled(disabled) {
     "agentProfile",
     "agentWorkflow", "agentPosition", "agentPump", "agentDelayMs",
     "agentPollMs", "agentS09Volume", "agentS07Balance", "agentS09Balance",
+    "agentTimeScale", "ptlcFaultStation", "ptlcFaultCode", "ptlcFaultOutcome",
   ]) {
     $(id).disabled = disabled;
   }
@@ -750,6 +796,7 @@ $("btnAgentStart").onclick = async () => {
       body.delay_ms = $("agentDelayMs").value.trim()
         ? readAgentNumber("agentDelayMs", "动作延时", 0, 3600000, true)
         : undefined;
+      body.time_scale = readAgentNumber("agentTimeScale", "仿真时间倍率", 0.01, 1000);
     } else {
       body.workflow = workflow;
     }
@@ -797,6 +844,18 @@ syncSzlabAgentOptions();
 $("btnAgentStop").onclick = () => stopManagedProcess(
   $("btnAgentStop"), "/api/agent/stop"
 );
+$("btnPtlcFault").onclick = async () => {
+  try {
+    const result = await post("/api/agent/ptlc/fault", {
+      station: $("ptlcFaultStation").value,
+      action_code: readAgentNumber(
+        "ptlcFaultCode", "PTLC 动作码", -32768, 32767, true
+      ),
+      outcome: $("ptlcFaultOutcome").value,
+    });
+    alert("运行期故障已更新:\n" + JSON.stringify(result.faults, null, 2));
+  } catch (e) { alert(e.message); }
+};
 
 // ---------------- 在线变量 ----------------
 const variablePage = {
@@ -1242,7 +1301,8 @@ function renderMonitoredVariables() {
     return `<tr data-index="${itemIndex}" data-element-index="${elementIndex ?? ""}">` +
     `<td class="variable-name"><strong>${escapeHtml(item.name + suffix)}</strong>` +
     `<small>${escapeHtml(arrayHint)}</small></td>` +
-    `<td><span class="type-pill">${escapeHtml(item.data_type)}</span></td>` +
+    `<td><span class="type-pill">${escapeHtml(item.data_type)}</span>` +
+    `${item.write_owner === "plc" ? '<small>PLC 输出</small>' : ''}</td>` +
     `<td><span class="monitor-current">--</span></td>` +
     `<td>${monitorEditor(item, elementIndex)}</td>` +
     `<td class="node-id">${escapeHtml(item.node_id + suffix)}</td>` +
@@ -1279,8 +1339,12 @@ function updateMonitorRows() {
     } else {
       current.textContent = formatVariableValue(elementValue(item, elementIndex));
     }
-    editor.disabled = !running || item.missing || item.offline;
-    writeButton.disabled = monitorState.loading || !running || item.missing || item.offline;
+    const ownershipBlocked = item.write_owner === "plc" &&
+      !$("monitorMaintenanceOverride").checked;
+    editor.disabled = !running || item.missing || item.offline || ownershipBlocked;
+    writeButton.disabled = monitorState.loading || !running || item.missing ||
+      item.offline || ownershipBlocked;
+    writeButton.title = ownershipBlocked ? "PLC 输出由握手/行为代理独占；维护写入可临时解锁" : "";
     const draft = monitorDraft(item, elementIndex);
     const currentValue = elementValue(item, elementIndex);
     const hasDraft = elementIndex === null
@@ -1332,6 +1396,8 @@ async function refreshMonitoredVariables({ announce = true } = {}) {
         const nextArrayLen = Math.max(0, Number(fresh.array_len || 0));
         if (arrayLength(item) !== nextArrayLen) shapeChanged = true;
         item.array_len = nextArrayLen;
+        item.write_owner = fresh.write_owner || "shared";
+        item.writable = fresh.writable !== false;
         item.value = fresh.value;
       }
     });
@@ -1381,6 +1447,7 @@ function scheduleMonitorRefresh() {
 $("btnRefreshMonitor").onclick = () => refreshMonitoredVariables();
 $("monitorAutoRefresh").onchange = scheduleMonitorRefresh;
 $("monitorRefreshInterval").onchange = scheduleMonitorRefresh;
+$("monitorMaintenanceOverride").onchange = updateMonitorRows;
 $("btnClearMonitor").onclick = () => {
   monitoredVariables = [];
   selectedVariables.clear();
@@ -1439,6 +1506,7 @@ $("monitorVarsTable").addEventListener("click", async event => {
       node_id: item.node_id,
       value: editor.value,
       index: elementIndex,
+      maintenance_override: $("monitorMaintenanceOverride").checked,
     }, 7000);
     item.value = response.value;
     if (elementIndex === null) item.draft = null;

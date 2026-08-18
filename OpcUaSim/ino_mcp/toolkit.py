@@ -459,6 +459,7 @@ class InoToolkit:
                     report["error"] = "online download 未确认成功；请在 InoProShop 内手工触发"
             except McpError as exc:
                 report["online"] = f"probe 失败: {exc}"
+                report["error"] = "online download 未确认成功；禁止记录为已部署或自动重试"
 
         return report
 

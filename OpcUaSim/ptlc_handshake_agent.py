@@ -17,8 +17,10 @@ from typing import Any, Mapping, Protocol
 
 try:
     from .common import load_yaml
+    from .ptlc_behavior import StationContract, load_behavior_contracts
 except ImportError:  # Direct `python ptlc_handshake_agent.py` compatibility.
     from common import load_yaml
+    from ptlc_behavior import StationContract, load_behavior_contracts
 
 
 STATIONS = (
@@ -144,8 +146,63 @@ class HandshakeEvent:
 class _Cycle:
     action_code: int
     request_seq: int
+    started_at: float
     due_at: float
     outcome: str
+    error_code: int = 0
+    safe_state: int = 10
+    retryable: bool = False
+    steps: tuple[int, ...] = ()
+    last_step_index: int = -1
+    motion: tuple[tuple[str, str, float, float], ...] = ()
+
+
+@dataclass
+class _DeployCycle:
+    request_seq: int
+    preparing_since: float
+
+
+class RuntimeFaults:
+    """可在运行期替换的确定性故障表。"""
+
+    VALID_OUTCOMES = frozenset({"done", "reject", "error", "hang", "interrupt"})
+
+    def __init__(self) -> None:
+        self._items: dict[tuple[str, int], str] = {}
+
+    def set(self, station: str, action_code: int, outcome: str) -> None:
+        normalized = str(outcome).strip().lower()
+        if normalized not in self.VALID_OUTCOMES:
+            raise ValueError(f"未知故障结果: {outcome}")
+        self._items[(station, int(action_code))] = normalized
+
+    def clear(self, station: str | None = None, action_code: int | None = None) -> None:
+        if station is None and action_code is None:
+            self._items.clear()
+            return
+        for key in list(self._items):
+            if (station is None or key[0] == station) and (
+                action_code is None or key[1] == int(action_code)
+            ):
+                self._items.pop(key, None)
+
+    def outcome(self, station: str, action_code: int) -> str | None:
+        return self._items.get((station, int(action_code)))
+
+    def load_payload(self, payload: Mapping[str, Any]) -> None:
+        self._items.clear()
+        for station, by_code in payload.items():
+            if station not in STATIONS or not isinstance(by_code, Mapping):
+                continue
+            for code, outcome in by_code.items():
+                self.set(station, int(code), str(outcome))
+
+    def snapshot(self) -> dict[str, dict[str, str]]:
+        result: dict[str, dict[str, str]] = {}
+        for (station, code), outcome in sorted(self._items.items()):
+            result.setdefault(station, {})[str(code)] = outcome
+        return result
 
 
 class PtlcHandshakeSimulator:
@@ -158,6 +215,7 @@ class PtlcHandshakeSimulator:
         config: Mapping[str, Any] | None = None,
         delay_s: float = 0.2,
         stations: tuple[str, ...] = STATIONS,
+        contracts: Mapping[str, StationContract] | None = None,
     ) -> None:
         self.adapter = adapter
         self.config = dict(config or {})
@@ -167,8 +225,24 @@ class PtlcHandshakeSimulator:
             raise ValueError(f"未知 PTLC L2 工位: {', '.join(unknown)}")
         self.stations = configured
         self.delay_s = max(float(delay_s), 0.0)
+        self.contracts = dict(contracts or load_behavior_contracts())
+        missing_contracts = sorted(set(self.stations) - set(self.contracts))
+        if missing_contracts:
+            raise ValueError(f"缺少 PTLC 工位行为契约: {', '.join(missing_contracts)}")
         self._previous_start = {station: False for station in self.stations}
         self._cycles: dict[str, _Cycle] = {}
+        self._previous_deploy_start = False
+        self._deploy_cycle: _DeployCycle | None = None
+        self.runtime_faults = RuntimeFaults()
+        process = dict(self.config.get("process", {}))
+        material = dict(process.get("material", {}))
+        self.process_state: dict[str, Any] = {
+            "feed_count": max(0, int(material.get("feed_count", 12))),
+            "waste_count": max(0, int(material.get("waste_count", 0))),
+            "waste_armed": False,
+            "vacuum_on": False,
+        }
+        self.events: list[dict[str, Any]] = []
 
     @staticmethod
     def node(station: str, field: str) -> str:
@@ -181,9 +255,20 @@ class PtlcHandshakeSimulator:
             for field in (*INPUT_FIELDS, *OUTPUT_DEFAULTS)
         }
         names.update(str(name) for name in self.config.get("initial_values", {}))
-        names.update(("PLC_Ready", "PLC_Deploy_State"))
+        names.update((
+            "PLC_Ready", "PLC_Axis_CommOperational",
+            "PLC_Deploy_RequestSeq", "PLC_Deploy_CommitSeq",
+            "PLC_Deploy_Start", "PLC_Deploy_Reset", "PLC_Deploy_State",
+            "PLC_Deploy_AcceptedSeq", "PLC_Deploy_ErrorCode",
+            "Pump_Vacuum_On",
+        ))
         for effect in self._all_effects():
             names.update(self._effect_names(effect))
+        for items in dict(self.config.get("motion_effects", {})).values():
+            for item in items or ():
+                if isinstance(item, Mapping):
+                    names.update((str(item.get("from", "")), str(item.get("to", ""))))
+        names.discard("")
         return tuple(sorted(names))
 
     def _all_effects(self) -> list[Mapping[str, Any]]:
@@ -212,15 +297,61 @@ class PtlcHandshakeSimulator:
     def initialize(self) -> None:
         for station in self.stations:
             for field, value in OUTPUT_DEFAULTS.items():
-                self.adapter.write(self.node(station, field), value)
+                try:
+                    self.adapter.write(self.node(station, field), value)
+                except KeyError:
+                    # 参考 PLC 的最小耦合原则：缺少可选/漂移节点只降级，不让代理整体退出。
+                    continue
         for name, value in dict(self.config.get("initial_values", {})).items():
-            self.adapter.write(str(name), value)
+            try:
+                self.adapter.write(str(name), value)
+            except KeyError:
+                continue
 
     def cleanup(self) -> None:
         self._cycles.clear()
         for station in self.stations:
             for field, value in OUTPUT_DEFAULTS.items():
-                self.adapter.write(self.node(station, field), value)
+                try:
+                    self.adapter.write(self.node(station, field), value)
+                except KeyError:
+                    continue
+        try:
+            self.adapter.write("Pump_Vacuum_On", False)
+            self.process_state["vacuum_on"] = False
+        except KeyError:
+            pass
+        try:
+            enables = list(self.adapter.read("Tank_Drain_Enable"))
+            self.adapter.write("Tank_Drain_Enable", [False] * len(enables))
+        except (KeyError, TypeError):
+            pass
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "active_cycles": {
+                station: {
+                    "action_code": cycle.action_code,
+                    "request_seq": cycle.request_seq,
+                    "outcome": cycle.outcome,
+                }
+                for station, cycle in self._cycles.items()
+            },
+            "deploy_active": self._deploy_cycle is not None,
+            "process": dict(self.process_state),
+            "faults": self.runtime_faults.snapshot(),
+            "events": self.events[-200:],
+        }
+
+    def _record(self, event: HandshakeEvent) -> None:
+        self.events.append({
+            "station": event.station,
+            "phase": event.phase,
+            "action_code": event.action_code,
+            "request_seq": event.request_seq,
+        })
+        if len(self.events) > 1000:
+            del self.events[:-500]
 
     def check(self) -> list[str]:
         missing: list[str] = []
@@ -247,6 +378,57 @@ class PtlcHandshakeSimulator:
             return max(float(delays[station]), 0.0) / 1000.0
         return self.delay_s
 
+    def _motion_for(self, station: str) -> tuple[tuple[str, str, float, float], ...]:
+        """捕获连续运动的 (target, actual, start, target_value)。"""
+        result: list[tuple[str, str, float, float]] = []
+        for item in dict(self.config.get("motion_effects", {})).get(station, ()) or ():
+            try:
+                target_name = str(item["from"])
+                actual_name = str(item["to"])
+                result.append((
+                    target_name,
+                    actual_name,
+                    float(self.adapter.read(actual_name)),
+                    float(self.adapter.read(target_name)),
+                ))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return tuple(result)
+
+    def _motion_duration(
+        self,
+        station: str,
+        motion: tuple[tuple[str, str, float, float], ...],
+    ) -> float:
+        speed = max(float(dict(self.config.get("motion_speed", {})).get(station, 100.0)), 0.001)
+        return max((abs(target - start) / speed for _, _, start, target in motion), default=0.0)
+
+    def _validate_action(self, station: str, code: int) -> tuple[str, int, int, bool] | None:
+        """复刻能由 flat OPC UA 参数确定的受理门；返回终态近似或 None。"""
+        try:
+            if station == "Rail" and code == 10:
+                position = int(self.adapter.read("Rail_Target_Position"))
+                if not 1 <= position <= 6:
+                    return "rejected", 101, 0, True
+                targets = list(self.adapter.read("Rail_Pos_Target"))
+                target = float(targets[position - 1])
+                if not 0.0 < target <= 3000.0:
+                    return "rejected", 102, 0, True
+            elif station == "Sampling" and code == 55:
+                count = int(self.adapter.read("Sampling_rinse_mix_count"))
+                instructions = list(self.adapter.read("Sampling_rinse_mix_instructions"))
+                if not 1 <= count <= 20 or len(instructions) != 4 or not all(
+                    str(value).strip() for value in instructions
+                ):
+                    return "error", 466, 90, False
+            elif station == "FeedLift" and code == 91:
+                if int(self.adapter.read("FeedLift_DebugAxis")) not in {1, 2}:
+                    return "error", 306, 90, False
+        except (KeyError, IndexError, TypeError, ValueError):
+            # 旧快照缺参数时由 contract check 报漂移，运行路径保持可降级。
+            return None
+        return None
+
     def _reset_station(self, station: str) -> None:
         self._cycles.pop(station, None)
         for field, value in OUTPUT_DEFAULTS.items():
@@ -257,8 +439,20 @@ class PtlcHandshakeSimulator:
         seq = int(self.adapter.read(self.node(station, "RequestSeq")))
         ready = bool(self.adapter.read("PLC_Ready"))
         deploy_state = int(self.adapter.read("PLC_Deploy_State"))
+        contract = self.contracts[station]
+        runtime_outcome = self.runtime_faults.outcome(station, code)
+        error_code = 0
+        safe_state = 10
+        retryable = False
         if not ready or deploy_state != 0:
-            outcome = "global_reject"
+            outcome, error_code, safe_state, retryable = "global_reject", 190, 0, True
+        elif code not in contract.accepts:
+            outcome = "unknown"
+            error_code, safe_state, retryable = contract.unknown_code_error, 0, True
+        elif runtime_outcome:
+            outcome = runtime_outcome
+        elif (validation := self._validate_action(station, code)) is not None:
+            outcome, error_code, safe_state, retryable = validation
         elif code in self._fault_codes(station, "reject_codes"):
             outcome = "rejected"
         elif code in self._fault_codes(station, "error_codes"):
@@ -267,13 +461,77 @@ class PtlcHandshakeSimulator:
             outcome = "hang"
         else:
             outcome = "done"
-        cycle = _Cycle(code, seq, now + self._station_delay(station, code), outcome)
+        if outcome in {"rejected", "reject"}:
+            error_code, safe_state, retryable = error_code or 102, 0, True
+        elif outcome == "error":
+            error_code, safe_state = 201, 90
+        elif outcome == "interrupt":
+            error_code, safe_state = 202, 90
+        motion = self._motion_for(station) if outcome == "done" else ()
+        delay = max(self._station_delay(station, code), self._motion_duration(station, motion))
+        action = contract.action(code)
+        steps = action.steps if action is not None else ()
+        if station == "Develop" and code in (50, 51) and outcome == "done":
+            try:
+                tank_state = self._target_tank_state()
+            except KeyError:
+                # 精简测试/旧快照没有 Tank 辅助节点时，保留原有 action_effects 近似。
+                outcome = "done"
+            except (IndexError, TypeError, ValueError):
+                outcome, error_code, safe_state = "error", 500, 90
+            else:
+                if code == 50 and tank_state in {10, 90}:
+                    outcome, error_code, safe_state, retryable = "rejected", 501, 0, True
+                elif code == 51 and tank_state not in {0, 98, 99}:
+                    outcome, error_code, safe_state, retryable = "rejected", 511, 0, True
+                else:
+                    outcome = "tank_drain" if code == 50 else "tank_release"
+                    try:
+                        delay = max(delay, self._prepare_tank_action(code))
+                    except KeyError:
+                        outcome = "done"
+        cycle = _Cycle(
+            code, seq, now, now + delay, outcome,
+            error_code=error_code, safe_state=safe_state, retryable=retryable,
+            steps=steps, motion=motion,
+        )
         self._cycles[station] = cycle
         self.adapter.write(self.node(station, "AcceptedSeq"), seq)
         self.adapter.write(self.node(station, "ActiveCode"), code)
         self.adapter.write(self.node(station, "Step"), 1)
         self.adapter.write(self.node(station, "State"), 10)
         return cycle, HandshakeEvent(station, "accepted", code, seq)
+
+    def _target_tank_state(self) -> int:
+        index = int(self.adapter.read("Expand_Target_Tank")) - 1
+        states = list(self.adapter.read("Tank_State"))
+        if not 0 <= index < len(states):
+            raise IndexError("Expand_Target_Tank 超出 1..8")
+        return int(states[index])
+
+    def _prepare_tank_action(self, code: int) -> float:
+        index = int(self.adapter.read("Expand_Target_Tank")) - 1
+        states = list(self.adapter.read("Tank_State"))
+        state = int(states[index])
+        if code == 50:
+            if state in {98, 99}:
+                return 0.0
+            states[index] = 50
+            enables = list(self.adapter.read("Tank_Drain_Enable"))
+            dones = list(self.adapter.read("Tank_Drain_Done"))
+            cap_hits = list(self.adapter.read("Tank_Drain_CapHit"))
+            enables[index], dones[index], cap_hits[index] = True, False, False
+            self.adapter.write("Tank_State", states)
+            self.adapter.write("Tank_Drain_Enable", enables)
+            self.adapter.write("Tank_Drain_Done", dones)
+            self.adapter.write("Tank_Drain_CapHit", cap_hits)
+            drain = max(0.0, float(self.adapter.read("Tank_Drain_S")))
+            cap = max(0.0, float(self.adapter.read("Tank_Drain_Cap_S")))
+            blow = max(0.0, float(self.adapter.read("Tank_Blow_S")))
+            dry = max(0.0, float(self.adapter.read("Tank_Dry_S")))
+            phase_a = min(drain, cap) if cap > 0 else drain
+            return phase_a + blow + dry
+        return 0.0
 
     def _effects_for(self, station: str, code: int) -> list[Mapping[str, Any]]:
         result: list[Mapping[str, Any]] = []
@@ -307,21 +565,109 @@ class PtlcHandshakeSimulator:
             values[index] = item.get("value")
             self.adapter.write(name, values)
 
+    def _progress_cycle(self, station: str, cycle: _Cycle, now: float) -> None:
+        duration = max(cycle.due_at - cycle.started_at, 0.0)
+        fraction = 1.0 if duration == 0 else min(max(
+            (now - cycle.started_at) / duration, 0.0
+        ), 1.0)
+        if cycle.steps:
+            index = min(int(fraction * len(cycle.steps)), len(cycle.steps) - 1)
+            if index != cycle.last_step_index:
+                self.adapter.write(self.node(station, "Step"), cycle.steps[index])
+                cycle.last_step_index = index
+        for _target_name, actual_name, start, target in cycle.motion:
+            self.adapter.write(actual_name, start + (target - start) * fraction)
+        if cycle.outcome == "tank_drain":
+            self._progress_tank_drain(cycle, now)
+
+    def _progress_tank_drain(self, cycle: _Cycle, now: float) -> None:
+        index = int(self.adapter.read("Expand_Target_Tank")) - 1
+        states = list(self.adapter.read("Tank_State"))
+        if int(states[index]) == 90:
+            cycle.outcome, cycle.error_code, cycle.safe_state = "error", 502, 90
+            cycle.due_at = now
+            return
+        if int(states[index]) in {98, 99}:
+            cycle.due_at = min(cycle.due_at, now)
+            return
+        drain = max(0.0, float(self.adapter.read("Tank_Drain_S")))
+        cap = max(0.0, float(self.adapter.read("Tank_Drain_Cap_S")))
+        blow = max(0.0, float(self.adapter.read("Tank_Blow_S")))
+        phase_a = min(drain, cap) if cap > 0 else drain
+        elapsed = max(0.0, now - cycle.started_at)
+        if elapsed < phase_a:
+            state = 50
+        elif elapsed < phase_a + blow:
+            state = 55
+            if cap > 0 and cap <= drain:
+                cap_hits = list(self.adapter.read("Tank_Drain_CapHit"))
+                cap_hits[index] = True
+                self.adapter.write("Tank_Drain_CapHit", cap_hits)
+        elif now < cycle.due_at:
+            state = 56
+        else:
+            state = 98
+        if int(states[index]) != state:
+            states[index] = state
+            self.adapter.write("Tank_State", states)
+        self.adapter.write(self.node("Develop", "Step"), state)
+
+    def _apply_process_effects(self, station: str, code: int) -> None:
+        if station == "Develop" and code in {50, 51}:
+            try:
+                index = int(self.adapter.read("Expand_Target_Tank")) - 1
+                states = list(self.adapter.read("Tank_State"))
+                enables = list(self.adapter.read("Tank_Drain_Enable"))
+                dones = list(self.adapter.read("Tank_Drain_Done"))
+                if code == 50:
+                    states[index], enables[index], dones[index] = 98, False, True
+                else:
+                    states[index], enables[index], dones[index] = 0, False, False
+                self.adapter.write("Tank_State", states)
+                self.adapter.write("Tank_Drain_Enable", enables)
+                self.adapter.write("Tank_Drain_Done", dones)
+            except (KeyError, IndexError, TypeError, ValueError):
+                pass
+        elif station == "Pump" and code in {10, 20}:
+            value = code == 10
+            self.process_state["vacuum_on"] = value
+            try:
+                self.adapter.write("Pump_Vacuum_On", value)
+            except KeyError:
+                pass
+        elif station == "FeedLift" and code == 12:
+            self.process_state["feed_count"] = max(
+                0, int(self.process_state["feed_count"]) - 1
+            )
+        elif station == "FeedLift" and code == 21:
+            self.process_state["waste_armed"] = True
+        elif station == "FeedLift" and code == 22 and self.process_state["waste_armed"]:
+            self.process_state["waste_count"] = int(self.process_state["waste_count"]) + 1
+            self.process_state["waste_armed"] = False
+
     def _finish_cycle(self, station: str, cycle: _Cycle) -> HandshakeEvent:
-        if cycle.outcome == "done":
+        if cycle.outcome in {"done", "tank_drain", "tank_release"}:
             try:
                 for effect in self._effects_for(station, cycle.action_code):
                     self._apply_effect(effect)
+                self._apply_process_effects(station, cycle.action_code)
             except (KeyError, IndexError, TypeError, ValueError):
                 state, error, safe, retryable, phase = 40, 500, 90, False, "error"
             else:
                 state, error, safe, retryable, phase = 20, 0, 10, False, "completed"
-        elif cycle.outcome == "global_reject":
-            state, error, safe, retryable, phase = 30, 190, 0, True, "rejected"
-        elif cycle.outcome == "rejected":
-            state, error, safe, retryable, phase = 30, 102, 0, True, "rejected"
+        elif cycle.outcome in {"global_reject", "rejected", "reject", "unknown"}:
+            state, error, safe, retryable, phase = (
+                30, cycle.error_code, cycle.safe_state, cycle.retryable, "rejected"
+            )
+        elif cycle.outcome == "interrupt":
+            state, error, safe, retryable, phase = (
+                50, cycle.error_code, cycle.safe_state, cycle.retryable, "interrupted"
+            )
         else:
-            state, error, safe, retryable, phase = 40, 201, 90, False, "error"
+            state, error, safe, retryable, phase = (
+                40, cycle.error_code or 201, cycle.safe_state or 90,
+                cycle.retryable, "error",
+            )
         self.adapter.write(self.node(station, "Step"), 90)
         self.adapter.write(self.node(station, "ErrorCode"), error)
         self.adapter.write(self.node(station, "SafeState"), safe)
@@ -331,16 +677,71 @@ class PtlcHandshakeSimulator:
         self._cycles.pop(station, None)
         return HandshakeEvent(station, phase, cycle.action_code, cycle.request_seq)
 
+    def _step_deploy(self, now: float) -> None:
+        reset = bool(self.adapter.read("PLC_Deploy_Reset"))
+        start = bool(self.adapter.read("PLC_Deploy_Start"))
+        commit_seq = int(self.adapter.read("PLC_Deploy_CommitSeq"))
+        state = int(self.adapter.read("PLC_Deploy_State"))
+        if reset and not start and commit_seq == 0:
+            self.adapter.write("PLC_Deploy_State", 0)
+            self.adapter.write("PLC_Deploy_ErrorCode", 0)
+            self._deploy_cycle = None
+        elif start and not self._previous_deploy_start and state == 0:
+            seq = int(self.adapter.read("PLC_Deploy_RequestSeq"))
+            self.adapter.write("PLC_Deploy_AcceptedSeq", seq)
+            l2_busy = any(
+                int(self.adapter.read(self.node(station, "State"))) == 10
+                for station in self.stations
+            )
+            if l2_busy:
+                self.adapter.write("PLC_Deploy_State", 30)
+                self.adapter.write("PLC_Deploy_ErrorCode", 1)
+            elif not bool(self.adapter.read("PLC_Ready")):
+                self.adapter.write("PLC_Deploy_State", 40)
+                self.adapter.write("PLC_Deploy_ErrorCode", 5)
+            else:
+                self.adapter.write("PLC_Deploy_ErrorCode", 0)
+                self.adapter.write("PLC_Deploy_State", 10)
+                self._deploy_cycle = _DeployCycle(seq, now)
+        elif state == 10:
+            comm = list(self.adapter.read("PLC_Axis_CommOperational"))
+            if len(comm) != 11 or not all(bool(value) for value in comm):
+                self.adapter.write("PLC_Deploy_State", 40)
+                self.adapter.write("PLC_Deploy_ErrorCode", 5)
+                self._deploy_cycle = None
+            else:
+                delay = max(float(self.config.get("deploy_prepare_ms", 40)), 0.0) / 1000.0
+                started = self._deploy_cycle.preparing_since if self._deploy_cycle else now
+                if now - started >= delay - 1e-9:
+                    self.adapter.write("PLC_Deploy_State", 20)
+        elif state == 20 and start:
+            accepted = int(self.adapter.read("PLC_Deploy_AcceptedSeq"))
+            if commit_seq != 0 and commit_seq == accepted:
+                self.adapter.write("PLC_Deploy_State", 25)
+        elif state == 25:
+            comm = list(self.adapter.read("PLC_Axis_CommOperational"))
+            if len(comm) != 11 or not all(bool(value) for value in comm):
+                # COMMITTED 后失败闭锁，不退回普通 ERROR。
+                self.adapter.write("PLC_Deploy_ErrorCode", 5)
+        self._previous_deploy_start = start
+
     def step(self, now: float | None = None) -> list[HandshakeEvent]:
         current = time.monotonic() if now is None else float(now)
         events: list[HandshakeEvent] = []
+        try:
+            self._step_deploy(current)
+        except KeyError:
+            # 兼容只构造单工位字段的单元测试/旧 PTLC 快照；check() 仍会报告缺项。
+            pass
         for station in self.stations:
             reset = bool(self.adapter.read(self.node(station, "Reset")))
             start = bool(self.adapter.read(self.node(station, "Start")))
             state = int(self.adapter.read(self.node(station, "State")))
             if reset:
                 if state != 0 or station in self._cycles:
-                    old = self._cycles.get(station, _Cycle(0, 0, current, "done"))
+                    old = self._cycles.get(
+                        station, _Cycle(0, 0, current, current, "done")
+                    )
                     self._reset_station(station)
                     events.append(HandshakeEvent(station, "reset", old.action_code, old.request_seq))
             elif start and not self._previous_start[station] and state == 0:
@@ -350,6 +751,7 @@ class PtlcHandshakeSimulator:
                     events.append(self._finish_cycle(station, cycle))
             elif station in self._cycles:
                 cycle = self._cycles[station]
+                self._progress_cycle(station, cycle, current)
                 if cycle.outcome != "hang" and cycle.due_at <= current:
                     events.append(self._finish_cycle(station, cycle))
             elif not start and state in TERMINAL_STATES:
@@ -361,6 +763,8 @@ class PtlcHandshakeSimulator:
                     int(self.adapter.read(self.node(station, "CompletedSeq"))),
                 ))
             self._previous_start[station] = start
+        for event in events:
+            self._record(event)
         return events
 
 
@@ -377,6 +781,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--password", default="")
     parser.add_argument("--delay-ms", type=int, default=None)
     parser.add_argument("--poll-ms", type=int, default=None)
+    parser.add_argument("--time-scale", type=float, default=None)
+    parser.add_argument("--fault-file", default=None,
+                        help="运行期故障 JSON；格式 {Station:{ActionCode: outcome}}")
+    parser.add_argument("--state-file", default=None,
+                        help="周期写出确定性进程/动作状态 JSON")
     parser.add_argument("--max-actions", type=int, default=0)
     parser.add_argument("--no-initialize", action="store_true")
     parser.add_argument("--keep-state-on-exit", action="store_true")
@@ -405,6 +814,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({
             "stations": simulator.stations,
             "nodes": simulator.contract_names(),
+            "actions": {
+                station: list(simulator.contracts[station].accepts)
+                for station in simulator.stations
+            },
+            "behavior_sha256": {
+                station: simulator.contracts[station].source_sha256
+                for station in simulator.stations
+            },
         }, ensure_ascii=False, indent=2))
         return 0
 
@@ -418,6 +835,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"PTLC 协议检查通过：{len(simulator.contract_names())} 个节点")
             return 0
 
+        missing = simulator.check()
+        if missing:
+            preview = ", ".join(missing[:20])
+            suffix = f" 等 {len(missing)} 项" if len(missing) > 20 else ""
+            print(
+                f"警告：PTLC 节点表与服务端存在漂移，相关功能将降级：{preview}{suffix}",
+                file=sys.stderr,
+                flush=True,
+            )
         if not args.no_initialize:
             simulator.initialize()
         stopping = False
@@ -433,12 +859,46 @@ def main(argv: list[str] | None = None) -> int:
             pass
 
         completed = 0
+        time_scale = float(
+            args.time_scale if args.time_scale is not None else config.get("time_scale", 1.0)
+        )
+        if not 0 < time_scale <= 1000:
+            print("time-scale 必须在 0..1000 之间", file=sys.stderr)
+            return 2
+        real_epoch = time.monotonic()
+        sim_epoch = real_epoch
+        fault_path = Path(args.fault_file).resolve() if args.fault_file else None
+        state_path = Path(args.state_file).resolve() if args.state_file else None
+        fault_stamp: int | None = None
+        next_state_write = 0.0
         print(f"PTLC L2 代理已连接 {args.url}，工位={','.join(simulator.stations)}", flush=True)
         while not stopping:
-            for event in simulator.step():
+            real_now = time.monotonic()
+            sim_now = sim_epoch + (real_now - real_epoch) * time_scale
+            if fault_path is not None:
+                try:
+                    stamp = fault_path.stat().st_mtime_ns
+                    if stamp != fault_stamp:
+                        payload = json.loads(fault_path.read_text(encoding="utf-8"))
+                        simulator.runtime_faults.load_payload(payload or {})
+                        fault_stamp = stamp
+                except FileNotFoundError:
+                    if fault_stamp is not None:
+                        simulator.runtime_faults.clear()
+                        fault_stamp = None
+                except (OSError, ValueError, TypeError) as exc:
+                    print(f"运行期故障文件无效: {exc}", file=sys.stderr, flush=True)
+            for event in simulator.step(now=sim_now):
                 print(json.dumps(event.__dict__, ensure_ascii=False), flush=True)
-                if event.phase in {"completed", "rejected", "error"}:
+                if event.phase in {"completed", "rejected", "error", "interrupted"}:
                     completed += 1
+            if state_path is not None and real_now >= next_state_write:
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text(
+                    json.dumps(simulator.snapshot(), ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                next_state_write = real_now + 0.25
             if args.max_actions and completed >= args.max_actions:
                 break
             time.sleep(poll_s)

@@ -32,8 +32,10 @@ def test_frozen_entry_repairs_missing_console_streams(monkeypatch) -> None:
 
         assert sys.stdout is opened[0]
         assert sys.stderr is opened[1]
-        assert sys.stdout.isatty() is False
-        assert sys.stderr.isatty() is False
+        # Windows PTY 下即使目标是 NUL，isatty() 也可能返回 True；这里的契约是
+        # 冻结 GUI 进程获得可写文本流，而不是伪造终端属性。
+        assert sys.stdout.writable()
+        assert sys.stderr.writable()
 
     for stream in opened:
         stream.close()
