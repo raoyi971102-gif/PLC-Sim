@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).parents[1]
 HTML = (ROOT / "gui" / "static" / "index.html").read_text(encoding="utf-8")
-JS = (ROOT / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+JS = (ROOT / "gui" / "static" / "project.js").read_text(encoding="utf-8")
 
 
 def test_gvl_select_all_and_variable_filter_are_separate_controls() -> None:
@@ -22,7 +21,7 @@ def test_discovered_gvls_start_selected_and_keep_select_all_in_sync() -> None:
 
 
 def test_discovered_gvls_render_as_a_left_aligned_file_tree() -> None:
-    assert "list.classList.remove(\"empty-box\")" in JS
+    assert 'list.classList.remove("empty-box")' in JS
     assert "renderGvlTree(r.gvls)" in JS
     assert 'class="gvl-folder-row"' in JS
     assert 'class="gvl-tree-item"' in JS

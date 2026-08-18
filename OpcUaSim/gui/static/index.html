@@ -592,6 +592,11 @@
     <div class="log-box" id="logBox"></div>
   </section>
 
+  <!-- 普通脚本按功能依赖顺序加载；无需 Node/Vite 构建即可离线运行。 -->
   <script src="/static/app.js"></script>
+  <script src="/static/project.js"></script>
+  <script src="/static/simulation.js"></script>
+  <script src="/static/variables.js"></script>
+  <script src="/static/diagnostics.js"></script>
 </body>
 </html>

@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from gui import backend
+from gui import agent_routes, backend
 from gui.backend import (
     SZLAB_WORKFLOW_IDS,
     AgentStartReq,
@@ -29,7 +29,7 @@ def test_workflow_catalog_matches_agent_and_gui() -> None:
 
 
 def test_attachment_flow_exposes_position_and_pump_options() -> None:
-    app_js = (Path(__file__).parents[1] / "gui" / "static" / "app.js").read_text(
+    app_js = (Path(__file__).parents[1] / "gui" / "static" / "simulation.js").read_text(
         encoding="utf-8"
     )
     workflow_id = "s_z_lab_单样品原子流程_无_s07_扫码"
@@ -50,7 +50,7 @@ def test_dual_task_attachment_profile_is_selectable_in_gui() -> None:
     html = (Path(__file__).parents[1] / "gui" / "static" / "index.html").read_text(
         encoding="utf-8"
     )
-    app_js = (Path(__file__).parents[1] / "gui" / "static" / "app.js").read_text(
+    app_js = (Path(__file__).parents[1] / "gui" / "static" / "simulation.js").read_text(
         encoding="utf-8"
     )
     workflow_id = "s_z_lab_双任务单样品原子流程_无_s07_扫码"
@@ -67,7 +67,7 @@ def test_dual_task_attachment_profile_is_selectable_in_gui() -> None:
 
 
 def test_official_stack_workflow_exposes_only_pump_options() -> None:
-    app_js = (Path(__file__).parents[1] / "gui" / "static" / "app.js").read_text(
+    app_js = (Path(__file__).parents[1] / "gui" / "static" / "simulation.js").read_text(
         encoding="utf-8"
     )
     workflow_id = "szlab_stack_s05_s06_workflow"
@@ -132,14 +132,24 @@ def test_szlab_agent_options_are_forwarded_to_cli() -> None:
 
 def test_ptlc_agent_only_forwards_generic_timing_options() -> None:
     req = AgentStartReq(
-        profile="ptlc", workflow="unknown_szlab_workflow",
-        delay_ms=75, poll_ms=10, time_scale=5, position=4,
+        profile="ptlc",
+        workflow="unknown_szlab_workflow",
+        delay_ms=75,
+        poll_ms=10,
+        time_scale=5,
+        position=4,
     )
     cmd = ["python", "ptlc_handshake_agent.py"]
     options = _extend_ptlc_command(cmd, req)
     assert cmd == [
-        "python", "ptlc_handshake_agent.py",
-        "--delay-ms", "75", "--poll-ms", "10", "--time-scale", "5.0",
+        "python",
+        "ptlc_handshake_agent.py",
+        "--delay-ms",
+        "75",
+        "--poll-ms",
+        "10",
+        "--time-scale",
+        "5.0",
     ]
     assert options == {"delay_ms": 75, "poll_ms": 10, "time_scale": 5.0}
 
@@ -147,7 +157,10 @@ def test_ptlc_agent_only_forwards_generic_timing_options() -> None:
 def test_ptlc_profiles_are_selectable_in_gui() -> None:
     root = Path(__file__).parents[1]
     html = (root / "gui" / "static" / "index.html").read_text(encoding="utf-8")
-    app_js = (root / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    app_js = "\n".join(
+        (root / "gui" / "static" / filename).read_text(encoding="utf-8")
+        for filename in ("app.js", "simulation.js", "variables.js")
+    )
     assert html.count('<option value="ptlc">') == 2
     assert "config/ptlc_nodes.yaml" in app_js
     assert "config/ptlc_handshake.yaml" in app_js
@@ -187,9 +200,13 @@ def test_agent_start_reports_an_immediate_process_failure(
 
             return 2
 
-    monkeypatch.setattr(backend.subprocess, "Popen", lambda *args, **kwargs: FailedProcess())
-    monkeypatch.setattr(backend, "_pipe_to_logger", lambda *args, **kwargs: None)
-    monkeypatch.setattr(backend, "runtime_data_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        agent_routes.subprocess,
+        "Popen",
+        lambda *args, **kwargs: FailedProcess(),
+    )
+    monkeypatch.setattr(agent_routes, "pipe_to_logger", lambda *args, **kwargs: None)
+    monkeypatch.setattr(agent_routes, "runtime_data_dir", lambda: tmp_path)
     backend._STATE.agent_proc = None
     backend._STATE.attached = False
 

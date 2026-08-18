@@ -6,30 +6,40 @@ import pytest
 from fastapi import HTTPException
 
 from common import NodeDef
-from gui import backend
+from gui import backend, server_routes
 
 
-def test_online_download_is_fail_closed_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_online_download_is_fail_closed_without_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("OPCUASIM_ALLOW_ONLINE_DEPLOY", raising=False)
-    backend._STATE.toolkit = object()  # gate must reject before touching toolkit methods
+    backend._STATE.toolkit = (
+        object()
+    )  # gate must reject before touching toolkit methods
     try:
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(backend.api_project_download(
-                backend.DownloadReq(strategy="online", confirm_online=True)
-            ))
+            asyncio.run(
+                backend.api_project_download(
+                    backend.DownloadReq(strategy="online", confirm_online=True)
+                )
+            )
         assert exc_info.value.status_code == 403
     finally:
         backend._STATE.toolkit = None
 
 
-def test_online_download_requires_explicit_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_online_download_requires_explicit_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("OPCUASIM_ALLOW_ONLINE_DEPLOY", "true")
     backend._STATE.toolkit = object()
     try:
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(backend.api_project_download(
-                backend.DownloadReq(strategy="online", confirm_online=False)
-            ))
+            asyncio.run(
+                backend.api_project_download(
+                    backend.DownloadReq(strategy="online", confirm_online=False)
+                )
+            )
         assert exc_info.value.status_code == 400
     finally:
         backend._STATE.toolkit = None
@@ -48,9 +58,11 @@ def test_online_download_cannot_bypass_ptlc_deploy_handshake(
     backend._STATE.toolkit = object()
     try:
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(backend.api_project_download(
-                backend.DownloadReq(strategy="online", confirm_online=True)
-            ))
+            asyncio.run(
+                backend.api_project_download(
+                    backend.DownloadReq(strategy="online", confirm_online=True)
+                )
+            )
         assert exc_info.value.status_code == 501
         assert "PlcProgramService" in str(exc_info.value.detail)
     finally:
@@ -61,16 +73,23 @@ def test_gui_cannot_write_plc_owned_output_without_maintenance_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     node = NodeDef(
-        "Rail_L2_State", "", "VARIABLE", "INT16", "ns=4;s=ptlc|Rail_L2_State",
+        "Rail_L2_State",
+        "",
+        "VARIABLE",
+        "INT16",
+        "ns=4;s=ptlc|Rail_L2_State",
         write_owner="plc",
     )
-    monkeypatch.setattr(backend, "_require_running_server", lambda: None)
+    monkeypatch.setattr(server_routes, "_require_running_server", lambda: None)
     backend._STATE.server_node_defs = [node]
     try:
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(backend.api_server_variable_write(
-                backend.ServerVariableWriteReq(node_id=node.node_id, value=10)
-            ))
+            asyncio.run(
+                backend.api_server_variable_write(
+                    backend.ServerVariableWriteReq(node_id=node.node_id, value=10)
+                )
+            )
         assert exc_info.value.status_code == 409
+        assert "只能由握手/行为代理写入" in str(exc_info.value.detail)
     finally:
         backend._STATE.server_node_defs = []

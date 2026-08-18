@@ -427,6 +427,21 @@ GUI 提供三个独立工作区：
 即使没有 MCP bundle，GUI 仍能启动 Server 和 Agent。项目打开、POU 编辑、编译、
 下载尝试和 GVL 提取需要配置下面的 MCP 依赖。
 
+### GUI 模块结构
+
+GUI 不需要 Node.js 构建步骤。FastAPI 后端按功能域组合路由，浏览器端脚本按下面的
+顺序直接加载；因此 wheel、Windows/macOS/Linux 安装包和源码启动保持同一套入口。
+
+- `gui/backend.py`：应用装配、状态/版本接口、SSE 日志和 CLI 入口。
+- `gui/project_routes.py`：工程打开、编辑、提取、编译和版本历史。
+- `gui/server_routes.py`：OPC UA Server 生命周期、变量读取和维护写入。
+- `gui/agent_routes.py`：SZLab/PTLC 握手代理生命周期和 PTLC 故障注入。
+- `gui/backend_state.py` 与 `gui/processes.py`：跨路由共享状态和子进程回收。
+- `gui/static/app.js`：通用请求、页面状态和标签切换。
+- `project.js`、`simulation.js`、`variables.js`、`diagnostics.js`：工程、仿真、
+  在线变量和诊断功能。浏览器模块按 `index.html` 的固定顺序复用 `app.js` 的请求与
+  状态辅助函数；对后端的 interface 仍是既有 `/api/...` HTTP/SSE 路径。
+
 ### 远程 Linux 挂接
 
 当 OPC UA Server 和 Agent 由 Supervisor 或 systemd 托管时，GUI 可以只挂接现有
@@ -527,7 +542,14 @@ python -m ino_mcp.cli extract `
 OpcUaSim/
 ├── config/                       # SZLab 握手配置
 ├── data/                         # 开箱即用的 CSV（含 szlab_plc_0810）
-├── gui/                          # FastAPI Web GUI 与前端资源
+├── gui/                          # FastAPI 应用装配、功能路由与前端资源
+│   ├── backend.py                # 应用、诊断、SSE 与 CLI 入口
+│   ├── backend_state.py          # 跨路由共享状态
+│   ├── processes.py              # 托管子进程生命周期
+│   ├── project_routes.py         # 工程/MCP 路由
+│   ├── server_routes.py          # OPC UA Server/变量路由
+│   ├── agent_routes.py           # 握手代理/PTLC 故障路由
+│   └── static/                   # 无构建步骤的模块化浏览器端资源
 ├── ino_mcp/                      # 可选 MCP 客户端、配置、业务封装和 CLI
 ├── scripts/                      # 启动器共用的内部脚本
 ├── tests/
