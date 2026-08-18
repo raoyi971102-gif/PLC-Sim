@@ -1,0 +1,56 @@
+# PTLC V2 L2 握手仿真配置（PLC-Sim 自包含，不依赖 PTLC 运行时）
+gvl_path:
+  - DeviceSet
+  - Inovance-ARM-Linux
+  - Resources
+  - Application
+  - GlobalVars
+  - Host_Computer
+
+stations: [Sampling, Collect, Develop, PhotoScrape, FeedLift, Pump, Rail, StagingA]
+delay_ms: 200
+poll_ms: 20
+
+# 模拟一台已经完成启动、总线正常的 PLC。
+initial_values:
+  PLC_Startup_State: 60
+  PLC_Startup_ErrorCode: 0
+  PLC_Ready: true
+  PLC_Axis_CommOperational: [true, true, true, true, true, true, true, true, true, true, true]
+
+# 正常完成后的通用到位镜像。
+station_effects:
+  Sampling:
+    copy:
+      - {from: Sampling_4X_Target, to: Sampling_4X_ActPos}
+      - {from: Sampling_3Y_Target, to: Sampling_3Y_ActPos}
+      - {from: Sampling_5Z_Target, to: Sampling_5Z_ActPos}
+  PhotoScrape:
+    copy:
+      - {from: Spot_7Y_Target, to: Spot_7Y_ActPos}
+      - {from: Photo_8Y_Target, to: Photo_8Y_ActPos}
+      - {from: Photo_8Y_Target, to: PhotoScrape_8Y_ActPos}
+      - {from: PhotoScrape_Align_TargetX, to: PhotoScrape_9X_ActPos}
+      - {from: PhotoScrape_Align_TargetZ, to: PhotoScrape_10Z_ActPos}
+  Rail:
+    copy:
+      - {from: Rail_Target_Position, to: Rail_Current_Position}
+    indexed_copy:
+      - {from: Rail_Pos_Target, index: Rail_Target_Position, index_base: 1, to: Rail_ActPos}
+
+# 展缸排液/释放的最小物理副作用，足以让上层工作流验证数组读写和状态推进。
+action_effects:
+  Develop:
+    "50":
+      set_index:
+        - {node: Tank_State, index: Expand_Target_Tank, index_base: 1, value: 98}
+        - {node: Tank_Drain_Done, index: Expand_Target_Tank, index_base: 1, value: true}
+    "51":
+      set_index:
+        - {node: Tank_State, index: Expand_Target_Tank, index_base: 1, value: 0}
+        - {node: Tank_Drain_Enable, index: Expand_Target_Tank, index_base: 1, value: false}
+        - {node: Tank_Drain_Done, index: Expand_Target_Tank, index_base: 1, value: false}
+
+# 故障注入示例（默认空）；可按工位填写动作码。
+faults:
+  all: {reject_codes: [], error_codes: [], hang_codes: []}

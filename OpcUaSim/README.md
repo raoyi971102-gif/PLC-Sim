@@ -2,8 +2,8 @@
 
 一个由 CSV 变量表驱动的 OPC UA 仿真环境，包含：
 
-- OPC UA Server：按 CSV 创建节点，默认监听 `opc.tcp://0.0.0.0:4855/xuse_sim/`
-- Handshake Agent：仿真 Type A/B/C/D 四类 PLC 握手
+- OPC UA Server：按 CSV 或 PTLC V2 节点快照创建节点，默认监听 `opc.tcp://0.0.0.0:4855/xuse_sim/`
+- Handshake Agent：仿真 SZLab 工作流握手或 PTLC V2 通用 L2 握手
 - Web GUI：管理变量提取、Server、Agent 以及可选的 InoProShop MCP 功能
 - MCP CLI：打开/编辑/编译 InoProShop 工程并从 GVL 提取 CSV
 
@@ -74,6 +74,8 @@ opcua-sim gui --host 127.0.0.1 --port 18765
 opcua-sim server --host 127.0.0.1 --port 4855
 opcua-sim handshake --url opc.tcp://127.0.0.1:4855/xuse_sim/
 opcua-sim szlab-handshake --workflow szlab_s09_pipetting_workflow
+opcua-sim server --profile ptlc
+opcua-sim ptlc-handshake --config config/ptlc_handshake.yaml
 ```
 
 如果系统没有将 Python Scripts 目录加入 `PATH`，可以等价运行：
@@ -246,6 +248,28 @@ python szlab_handshake_agent.py `
 ```
 
 `config/szlab_handshake.yaml` 可覆盖延时、工作流与初值。
+
+## PTLC V2 L2 握手仿真
+
+PTLC profile 是 PLC-Sim 内置的协议快照，不会在运行时导入或修改 PTLC 仓库：
+
+```bash
+opcua-sim server --profile ptlc --csv config/ptlc_nodes.yaml
+opcua-sim ptlc-handshake --config config/ptlc_handshake.yaml
+```
+
+Server 会创建
+`Objects/DeviceSet/Inovance-ARM-Linux/Resources/Application/GlobalVars/Host_Computer`
+嵌套 GVL，支持 Boolean、Byte、Int16、Int32、Float、Double、String 以及固定长度真数组。
+代理响应 Sampling、Collect、Develop、PhotoScrape、FeedLift、Pump、Rail、StagingA
+八个统一 L2 通道，并支持 Ready/Deploy 全局门、故障码注入、轴到位镜像、地轨数组
+索引和 Develop 50/51 展缸副作用。GUI 中分别把节点模型和代理类型切换为 PTLC 即可。
+
+如需核对参考仓库漂移，可在测试环境设置 `PTLC_REFERENCE_ROOT` 指向 PTLC V2 仓库根目录：
+
+```bash
+PTLC_REFERENCE_ROOT=/path/to/pTLC_platformUI pytest tests/test_ptlc_contract.py
+```
 
 ## SZLab Poly Studio 握手仿真
 

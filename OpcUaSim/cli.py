@@ -12,6 +12,7 @@ COMMANDS = {
     "gui": "gui.backend",
     "server": "server",
     "szlab-handshake": "szlab_handshake_agent",
+    "ptlc-handshake": "ptlc_handshake_agent",
     "handshake": "szlab_handshake_agent",  # 兼容旧入口，等价于 szlab-handshake
     "ino": "ino_mcp.cli",
 }
@@ -26,6 +27,7 @@ commands:
   gui                Start the Web GUI (default)
   server             Start the CSV-driven OPC UA Server
   szlab-handshake    Start the SZLab Poly Studio handshake agent
+  ptlc-handshake     Start the PTLC V2 L2 handshake agent
   handshake          Alias of szlab-handshake
   ino                Run the optional InoProShop MCP CLI
 

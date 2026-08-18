@@ -250,13 +250,20 @@
             <div>
               <span class="service-kicker">服务端</span>
               <h2>OPC UA Server</h2>
-              <p>依据 CSV 创建可写变量节点并监听客户端连接。</p>
+              <p>依据 CSV 或 PTLC V2 协议快照创建可写变量节点并监听客户端连接。</p>
             </div>
             <span class="pid-badge" id="pidServer">PID --</span>
           </div>
           <div class="form-grid">
             <label class="field full">
-              <span>变量 CSV</span>
+              <span>节点模型</span>
+              <select id="simProfile">
+                <option value="csv">CSV / SZLab</option>
+                <option value="ptlc">PTLC V2（嵌套 GVL + 真数组）</option>
+              </select>
+            </label>
+            <label class="field full">
+              <span id="simNodeTableLabel">变量 CSV</span>
               <input id="simCsv" value="data/szlab_plc_0810.csv">
             </label>
             <label class="field full">
@@ -304,6 +311,13 @@
             <span class="pid-badge" id="pidAgent">PID --</span>
           </div>
           <div class="form-grid">
+            <label class="field full">
+              <span>代理类型</span>
+              <select id="agentProfile">
+                <option value="szlab">SZLab 工作流握手</option>
+                <option value="ptlc">PTLC V2 通用 L2 握手</option>
+              </select>
+            </label>
             <label class="field">
               <span>服务器地址</span>
               <input id="agentHost" value="127.0.0.1">
@@ -318,11 +332,11 @@
             </label>
             <details id="szlabAgentOptions" class="agent-options full" open>
               <summary>
-                <span>SZLab 工作流调试参数</span>
-                <small>仅初始化并响应所选工作流；参数在下次启动时生效</small>
+                <span>握手调试参数</span>
+                <small>SZLab 可选择工作流；PTLC 使用通用 L2 工位代理</small>
               </summary>
               <div class="form-grid agent-options-grid">
-                <label class="field full">
+                <label class="field full" id="agentWorkflowField">
                   <span>调试工作流</span>
                   <select id="agentWorkflow">
                     <option value="all">全部官方工作流</option>
@@ -364,7 +378,7 @@
                   <input id="agentDelayMs" type="number" min="0" max="3600000" step="10"
                          placeholder="S04 磁搅优先使用本次动作时间">
                 </label>
-                <label class="field">
+                <label class="field" id="agentPollField">
                   <span>轮询间隔 <em>ms</em></span>
                   <input id="agentPollMs" type="number" value="20" min="5" max="60000" step="5">
                 </label>
@@ -382,6 +396,9 @@
                 </label>
               </div>
             </details>
+            <div id="ptlcAgentHint" class="field full hidden">
+              <span>PTLC 模式响应 8 个 L2 工位，并启用到位镜像、地轨数组索引和展缸 50/51 副作用。</span>
+            </div>
           </div>
           <div class="card-actions">
             <button id="btnAgentStop" class="btn danger" disabled>停止代理</button>

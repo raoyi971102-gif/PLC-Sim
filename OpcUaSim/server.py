@@ -37,6 +37,7 @@ try:
         connection_state_path,
         default_csv_path,
         load_csvs,
+        load_ptlc_nodes,
         setup_logging,
     )
 except ImportError:  # Direct `python server.py` compatibility.
@@ -48,6 +49,7 @@ except ImportError:  # Direct `python server.py` compatibility.
         connection_state_path,
         default_csv_path,
         load_csvs,
+        load_ptlc_nodes,
         setup_logging,
     )
 
@@ -80,12 +82,23 @@ def register_ns_padding(server: Server, target_index: int, xuse_uri: str) -> int
 
 
 def add_nodes(server: Server, ns_idx: int, defs: List[NodeDef]) -> Dict[str, Any]:
-    """把 CSV 中的每个变量作为 Objects 下的直接子节点创建。"""
+    """创建标量/数组变量；``browse_path`` 非空时先构造嵌套对象树。"""
     objects = server.get_objects_node()
+    parents: Dict[tuple[str, ...], Any] = {(): objects}
     result: Dict[str, Any] = {}
     for nd in defs:
         variant = VTYPE_MAP[nd.data_type]
-        default = DEFAULT_MAP[nd.data_type]
+        scalar_default = DEFAULT_MAP[nd.data_type]
+        default = nd.initial_value
+        if default is None:
+            default = [scalar_default] * nd.array_len if nd.array_len else scalar_default
+        parent = objects
+        partial: tuple[str, ...] = ()
+        for part in nd.browse_path:
+            partial += (part,)
+            if partial not in parents:
+                parents[partial] = parent.add_object(ns_idx, part)
+            parent = parents[partial]
         try:
             nid = ua.NodeId.from_string(nd.node_id)
         except Exception:
@@ -97,7 +110,10 @@ def add_nodes(server: Server, ns_idx: int, defs: List[NodeDef]) -> Dict[str, Any
                         nid.NamespaceIndex, ns_idx, nd.name_cn)
             nid = ua.NodeId(nid.Identifier, ns_idx, nid.NodeIdType)
 
-        var = objects.add_variable(nid, nd.name_cn, default, varianttype=variant)
+        var = parent.add_variable(nid, nd.name_cn, default, varianttype=variant)
+        if nd.array_len:
+            var.set_value_rank(1)
+            var.set_array_dimensions([nd.array_len])
         var.set_writable()
         if nd.name_en:
             try:
@@ -218,6 +234,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="XUSE OPC UA 仿真服务器（纯服务器版）")
     parser.add_argument("--host", default="0.0.0.0", help="监听地址 (默认 0.0.0.0)")
     parser.add_argument("--port", type=int, default=4855, help="监听端口 (默认 4855)")
+    parser.add_argument(
+        "--profile", choices=("csv", "ptlc"), default="csv",
+        help="节点模型：csv=现有 CSV；ptlc=PTLC V2 嵌套 GVL/真数组",
+    )
     default_csv = str(default_csv_path())
     parser.add_argument(
         "--csv",
@@ -236,16 +256,26 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    csv_paths = [Path(p).resolve() for p in (args.csv or [default_csv])]
-    for cp in csv_paths:
+    if args.profile == "ptlc":
+        default_ptlc = Path(__file__).with_name("config") / "ptlc_nodes.yaml"
+        profile_paths = [Path(p).resolve() for p in (args.csv or [str(default_ptlc)])]
+    else:
+        profile_paths = [Path(p).resolve() for p in (args.csv or [default_csv])]
+    for cp in profile_paths:
         if not cp.exists():
-            log.error("CSV 文件不存在: %s", cp)
+            log.error("节点表不存在: %s", cp)
             return 2
-    log.info("将加载 %d 份 CSV：", len(csv_paths))
-    for cp in csv_paths:
+    log.info("将加载 %d 份 %s 节点表：", len(profile_paths), args.profile)
+    for cp in profile_paths:
         log.info("  - %s", cp)
 
-    node_defs: List[NodeDef] = load_csvs(csv_paths)
+    if args.profile == "ptlc":
+        if len(profile_paths) != 1:
+            log.error("PTLC profile 只接受一份 YAML 节点表")
+            return 2
+        node_defs = load_ptlc_nodes(profile_paths[0], ns_index=args.ns_index)
+    else:
+        node_defs = load_csvs(profile_paths)
 
     endpoint = f"opc.tcp://{args.host}:{args.port}/xuse_sim/"
     server = build_server(endpoint)
@@ -258,7 +288,8 @@ def main() -> int:
     log.info("  Endpoint : %s", endpoint)
     log.info("  Namespace: ns=%d (%s)", ns_idx, args.ns_uri)
     log.info("  Anon     : 允许匿名 (NoSecurity)")
-    log.info("  Handshake: 未启动 (如需请另开进程运行 szlab_handshake_agent.py)")
+    log.info("  Profile  : %s", args.profile)
+    log.info("  Handshake: 未启动 (请另开对应 profile 的握手代理)")
     log.info("=" * 68)
 
     try:

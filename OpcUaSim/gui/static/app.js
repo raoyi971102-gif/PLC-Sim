@@ -5,7 +5,7 @@
 
 // 版本 marker —— F12 Console 里能看到. 如果你看到的是旧样式但这一行没打印,
 // 说明你的浏览器根本没执行这份 app.js (纯缓存旧文件).
-const GUI_BUILD = "2026-08-02_parallel-robot-lock";
+const GUI_BUILD = "2026-08-18_ptlc-profile";
 console.log("%c[OpcUaSim] GUI build " + GUI_BUILD, "color:#3ecf8e;font-weight:bold");
 
 const $ = (id) => document.getElementById(id);
@@ -50,6 +50,16 @@ async function api(method, url, body, timeoutMs = 0) {
 
 const get  = (u)      => api("GET", u);
 const post = (u, b, timeoutMs = 0) => api("POST", u, b || {}, timeoutMs);
+
+async function requireBackendCapability(name, label) {
+  const version = await get("/api/version");
+  if (!version.capabilities?.[name]) {
+    throw new Error(
+      `当前页面已包含${label}，但常驻 GUI 后端仍是旧版本。` +
+      "请关闭启动 GUI 的终端/窗口，重新运行 start_gui.bat 或 opcua-sim gui，再刷新页面。"
+    );
+  }
+}
 
 function showResult(node, ok, text) {
   if (node.classList.contains("inline-result")) {
@@ -552,6 +562,18 @@ $("btnSetPou").onclick = async () => {
 };
 
 // ---------------- Tab: Sim ----------------
+function syncServerProfile() {
+  const ptlc = $("simProfile").value === "ptlc";
+  $("simNodeTableLabel").textContent = ptlc ? "PTLC 节点 YAML" : "变量 CSV";
+  $("simCsvFile").closest("label").classList.toggle("hidden", ptlc);
+  $("simOcc").closest("label").classList.toggle("hidden", ptlc);
+  $("simCsv").value = ptlc
+    ? "config/ptlc_nodes.yaml"
+    : "data/szlab_plc_0810.csv";
+}
+$("simProfile").onchange = syncServerProfile;
+syncServerProfile();
+
 // 远程部署时浏览器所在机器和服务器不是同一台, 填不出服务器路径 —— 上传后回填
 $("simCsvFile").onchange = async (e) => {
   const input = e.target;
@@ -581,8 +603,12 @@ $("simCsvFile").onchange = async (e) => {
 
 $("btnServerStart").onclick = async () => {
   try {
+    if ($("simProfile").value === "ptlc") {
+      await requireBackendCapability("ptlc_server_profile", "PTLC 节点模型");
+    }
     const r = await post("/api/server/start", {
       csv: $("simCsv").value.trim() || null,
+      profile: $("simProfile").value,
       host: $("simHost").value.trim() || "0.0.0.0",
       port: parseInt($("simPort").value, 10) || 4855,
       ns_index: parseInt($("simNs").value, 10) || 4,
@@ -651,6 +677,17 @@ const SZLAB_S09_WORKFLOWS = new Set([
 ]);
 
 function syncSzlabAgentOptions() {
+  const ptlc = $("agentProfile").value === "ptlc";
+  $("ptlcAgentHint").classList.toggle("hidden", !ptlc);
+  $("agentWorkflowField").classList.toggle("hidden", ptlc);
+  if (ptlc) {
+    for (const id of [
+      "agentPositionField", "agentPumpField", "agentS09VolumeField",
+      "agentS07BalanceField", "agentS09BalanceField",
+    ]) $(id).classList.add("hidden");
+    $("agentDelayField").classList.remove("hidden");
+    return;
+  }
   const workflow = $("agentWorkflow").value;
   $("agentPositionField").classList.toggle(
     "hidden", !SZLAB_S04_WORKFLOWS.has(workflow)
@@ -675,6 +712,7 @@ function syncSzlabAgentOptions() {
 function setAgentFormDisabled(disabled) {
   for (const id of [
     "agentHost", "agentPort", "agentCfg",
+    "agentProfile",
     "agentWorkflow", "agentPosition", "agentPump", "agentDelayMs",
     "agentPollMs", "agentS09Volume", "agentS07Balance", "agentS09Balance",
   ]) {
@@ -697,27 +735,37 @@ function readAgentNumber(id, label, min, max, integer = false) {
 $("btnAgentStart").onclick = async () => {
   try {
     const workflow = $("agentWorkflow").value;
+    const profile = $("agentProfile").value;
+    if (profile === "ptlc") {
+      await requireBackendCapability("ptlc_handshake_agent", "PTLC L2 代理");
+    }
     const body = {
-      profile: "szlab",
+      profile,
       host: $("agentHost").value.trim() || "127.0.0.1",
       port: parseInt($("agentPort").value, 10) || 4855,
       config: $("agentCfg").value.trim() || null,
-      workflow,
       poll_ms: readAgentNumber("agentPollMs", "轮询间隔", 5, 60000, true),
     };
-    if (
+    if (profile === "ptlc") {
+      body.delay_ms = $("agentDelayMs").value.trim()
+        ? readAgentNumber("agentDelayMs", "动作延时", 0, 3600000, true)
+        : undefined;
+    } else {
+      body.workflow = workflow;
+    }
+    if (profile === "szlab" &&
       workflow !== "szlab_photoshotting_workflow" &&
       $("agentDelayMs").value.trim()
     ) {
       body.delay_ms = readAgentNumber("agentDelayMs", "动作延时", 0, 3600000, true);
     }
-    if (SZLAB_S04_WORKFLOWS.has(workflow)) {
+    if (profile === "szlab" && SZLAB_S04_WORKFLOWS.has(workflow)) {
       body.position = readAgentNumber("agentPosition", "S04 位置", 1, 6, true);
     }
-    if (SZLAB_PUMP_WORKFLOWS.has(workflow)) {
+    if (profile === "szlab" && SZLAB_PUMP_WORKFLOWS.has(workflow)) {
       body.pump = readAgentNumber("agentPump", "储液泵", 1, 3, true);
     }
-    if (SZLAB_S09_WORKFLOWS.has(workflow)) {
+    if (profile === "szlab" && SZLAB_S09_WORKFLOWS.has(workflow)) {
       body.s09_remaining_volume_ml = readAgentNumber(
         "agentS09Volume", "S09 初始余量", 0.1, Number.MAX_SAFE_INTEGER
       );
@@ -726,7 +774,7 @@ $("btnAgentStart").onclick = async () => {
         -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER
       );
     }
-    if (SZLAB_S07_WORKFLOWS.has(workflow)) {
+    if (profile === "szlab" && SZLAB_S07_WORKFLOWS.has(workflow)) {
       body.s07_balance_reading = readAgentNumber(
         "agentS07Balance", "S07 模拟天平读数",
         -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER
@@ -738,6 +786,13 @@ $("btnAgentStart").onclick = async () => {
   } catch (e) { alert(e.message); }
 };
 $("agentWorkflow").onchange = syncSzlabAgentOptions;
+$("agentProfile").onchange = () => {
+  const ptlc = $("agentProfile").value === "ptlc";
+  $("agentCfg").value = ptlc
+    ? "config/ptlc_handshake.yaml"
+    : "config/szlab_handshake.yaml";
+  syncSzlabAgentOptions();
+};
 syncSzlabAgentOptions();
 $("btnAgentStop").onclick = () => stopManagedProcess(
   $("btnAgentStop"), "/api/agent/stop"
@@ -788,6 +843,7 @@ function sanitizeStoredMonitors(items) {
       english_name: String(item.english_name || ""),
       data_type: String(item.data_type),
       node_id: String(item.node_id),
+      array_len: Math.max(0, Number(item.array_len || 0)),
     }));
 }
 
@@ -796,6 +852,7 @@ function hydrateStoredMonitors(items) {
     ...item,
     value: null,
     draft: null,
+    drafts: {},
     missing: false,
     offline: true,
   }));
@@ -945,6 +1002,25 @@ function formatVariableValue(value) {
   return String(value);
 }
 
+function arrayLength(item) {
+  return Math.max(0, Number(item?.array_len || 0));
+}
+
+function elementValue(item, elementIndex) {
+  if (elementIndex === null) return item.value;
+  return Array.isArray(item.value) ? item.value[elementIndex] : undefined;
+}
+
+function variableRows(items) {
+  return items.flatMap((item, itemIndex) => {
+    const length = arrayLength(item);
+    if (!length) return [{ item, itemIndex, elementIndex: null }];
+    return Array.from({ length }, (_, elementIndex) => ({
+      item, itemIndex, elementIndex,
+    }));
+  });
+}
+
 function updateVariableControls() {
   const running = !!currentAppState?.server?.running;
   const selectable = variablePage.items.filter(item => !isMonitored(item.node_id));
@@ -998,18 +1074,22 @@ function renderServerVariables() {
     return;
   }
 
-  tbody.innerHTML = variablePage.items.map((item, index) => {
+  tbody.innerHTML = variableRows(variablePage.items).map(({ item, itemIndex, elementIndex }) => {
     const monitored = isMonitored(item.node_id);
     const selected = selectedVariables.has(item.node_id);
-    return `<tr data-index="${index}">` +
+    const suffix = elementIndex === null ? "" : `[${elementIndex + 1}]`;
+    const currentValue = elementValue(item, elementIndex);
+    const arrayHint = elementIndex === null ? "" :
+      `<small>数组元素 ${elementIndex + 1} / ${arrayLength(item)}</small>`;
+    return `<tr data-index="${itemIndex}" data-element-index="${elementIndex ?? ""}">` +
       `<td class="select-cell"><input class="var-select" type="checkbox" ` +
-      `aria-label="选择 ${escapeHtml(item.name)}" ${selected ? "checked" : ""} ` +
+      `aria-label="选择 ${escapeHtml(item.name + suffix)}" ${selected ? "checked" : ""} ` +
       `${monitored ? "disabled" : ""}></td>` +
-      `<td class="variable-name"><strong>${escapeHtml(item.name)}</strong>` +
-      `<small>${escapeHtml(item.english_name || "")}</small></td>` +
+      `<td class="variable-name"><strong>${escapeHtml(item.name + suffix)}</strong>` +
+      `${arrayHint || `<small>${escapeHtml(item.english_name || "")}</small>`}</td>` +
       `<td><span class="type-pill">${escapeHtml(item.data_type)}</span></td>` +
-      `<td><span class="read-value">${escapeHtml(formatVariableValue(item.value))}</span></td>` +
-      `<td class="node-id">${escapeHtml(item.node_id)}</td>` +
+      `<td><span class="read-value">${escapeHtml(formatVariableValue(currentValue))}</span></td>` +
+      `<td class="node-id">${escapeHtml(item.node_id + suffix)}</td>` +
       `<td>${monitored ? '<span class="monitor-status active">已监控</span>' :
         '<span class="monitor-status">未监控</span>'}</td>` +
       `</tr>`;
@@ -1081,7 +1161,7 @@ $("serverVarsTable").addEventListener("change", event => {
   if (!item) return;
   if (checkbox.checked) selectedVariables.set(item.node_id, item);
   else selectedVariables.delete(item.node_id);
-  updateVariableControls();
+  renderServerVariables();
 });
 
 $("selectPageVars").onchange = event => {
@@ -1121,16 +1201,24 @@ $("btnAddSelectedVars").onclick = () => {
   }
 };
 
-function monitorEditor(item) {
-  const draft = item.draft === null ? item.value : item.draft;
+function monitorDraft(item, elementIndex) {
+  if (elementIndex === null) return item.draft === null ? item.value : item.draft;
+  item.drafts ||= {};
+  return Object.prototype.hasOwnProperty.call(item.drafts, elementIndex)
+    ? item.drafts[elementIndex]
+    : elementValue(item, elementIndex);
+}
+
+function monitorEditor(item, elementIndex) {
+  const draft = monitorDraft(item, elementIndex);
   if (item.data_type === "BOOLEAN") {
     const current = draft === true || String(draft).toLowerCase() === "true";
     return `<select class="value-editor monitor-editor" aria-label="${escapeHtml(item.name)} 新值">` +
       `<option value="true"${current ? " selected" : ""}>true</option>` +
       `<option value="false"${!current ? " selected" : ""}>false</option></select>`;
   }
-  const isNumeric = ["INT16", "INT32", "FLOAT"].includes(item.data_type);
-  const step = item.data_type === "FLOAT" ? "any" : "1";
+  const isNumeric = ["BYTE", "INT16", "INT32", "FLOAT", "DOUBLE"].includes(item.data_type);
+  const step = ["FLOAT", "DOUBLE"].includes(item.data_type) ? "any" : "1";
   const value = draft === null || draft === undefined ? "" : draft;
   return `<input class="value-editor monitor-editor" ` +
     `${isNumeric ? `type="number" step="${step}"` : 'type="text"'} ` +
@@ -1147,19 +1235,22 @@ function renderMonitoredVariables() {
     return;
   }
 
-  tbody.innerHTML = monitoredVariables.map((item, index) =>
-    `<tr data-index="${index}">` +
-    `<td class="variable-name"><strong>${escapeHtml(item.name)}</strong>` +
-    `<small>${escapeHtml(item.english_name || "")}</small></td>` +
+  tbody.innerHTML = variableRows(monitoredVariables).map(({ item, itemIndex, elementIndex }) => {
+    const suffix = elementIndex === null ? "" : `[${elementIndex + 1}]`;
+    const arrayHint = elementIndex === null ? (item.english_name || "") :
+      `数组元素 ${elementIndex + 1} / ${arrayLength(item)}`;
+    return `<tr data-index="${itemIndex}" data-element-index="${elementIndex ?? ""}">` +
+    `<td class="variable-name"><strong>${escapeHtml(item.name + suffix)}</strong>` +
+    `<small>${escapeHtml(arrayHint)}</small></td>` +
     `<td><span class="type-pill">${escapeHtml(item.data_type)}</span></td>` +
     `<td><span class="monitor-current">--</span></td>` +
-    `<td>${monitorEditor(item)}</td>` +
-    `<td class="node-id">${escapeHtml(item.node_id)}</td>` +
+    `<td>${monitorEditor(item, elementIndex)}</td>` +
+    `<td class="node-id">${escapeHtml(item.node_id + suffix)}</td>` +
     `<td class="monitor-actions">` +
     `<button class="btn small monitor-write">写入</button>` +
     `<button class="text-button monitor-remove">移除</button>` +
-    `</td></tr>`
-  ).join("");
+    `</td></tr>`;
+  }).join("");
   updateMonitorRows();
   if (currentAppState === null) {
     monitorMessage(`已恢复 ${monitoredVariables.length} 个监控变量，服务连接后将自动读取。`);
@@ -1171,6 +1262,9 @@ function updateMonitorRows() {
   els("tbody tr[data-index]", $("monitorVarsTable")).forEach(row => {
     const item = monitoredVariables[Number(row.dataset.index)];
     if (!item) return;
+    const elementIndex = row.dataset.elementIndex === ""
+      ? null
+      : Number(row.dataset.elementIndex);
     const current = el(".monitor-current", row);
     const editor = el(".monitor-editor", row);
     const writeButton = el(".monitor-write", row);
@@ -1183,14 +1277,19 @@ function updateMonitorRows() {
       current.textContent = "节点不存在";
       current.classList.add("missing");
     } else {
-      current.textContent = formatVariableValue(item.value);
+      current.textContent = formatVariableValue(elementValue(item, elementIndex));
     }
     editor.disabled = !running || item.missing || item.offline;
     writeButton.disabled = monitorState.loading || !running || item.missing || item.offline;
-    if (item.draft === null && document.activeElement !== editor) {
-      editor.value = formatVariableValue(item.value) === "--"
+    const draft = monitorDraft(item, elementIndex);
+    const currentValue = elementValue(item, elementIndex);
+    const hasDraft = elementIndex === null
+      ? item.draft !== null
+      : Object.prototype.hasOwnProperty.call(item.drafts || {}, elementIndex);
+    if (!hasDraft && document.activeElement !== editor) {
+      editor.value = formatVariableValue(currentValue) === "--"
         ? (item.data_type === "BOOLEAN" ? "false" : "")
-        : formatVariableValue(item.value);
+        : formatVariableValue(currentValue);
     }
   });
   updateVariableControls();
@@ -1221,6 +1320,7 @@ async function refreshMonitoredVariables({ announce = true } = {}) {
     }, 7000);
     const values = new Map(response.items.map(item => [item.node_id, item]));
     const missing = new Set(response.missing || []);
+    let shapeChanged = false;
     monitoredVariables.forEach(item => {
       const fresh = values.get(item.node_id);
       item.offline = false;
@@ -1229,6 +1329,9 @@ async function refreshMonitoredVariables({ announce = true } = {}) {
         item.name = fresh.name;
         item.english_name = fresh.english_name || "";
         item.data_type = fresh.data_type;
+        const nextArrayLen = Math.max(0, Number(fresh.array_len || 0));
+        if (arrayLength(item) !== nextArrayLen) shapeChanged = true;
+        item.array_len = nextArrayLen;
         item.value = fresh.value;
       }
     });
@@ -1238,7 +1341,8 @@ async function refreshMonitoredVariables({ announce = true } = {}) {
       const fresh = values.get(item.node_id);
       if (fresh) item.value = fresh.value;
     });
-    updateMonitorRows();
+    if (shapeChanged) renderMonitoredVariables();
+    else updateMonitorRows();
     renderServerVariables();
     const missingCount = missing.size;
     if (announce || missingCount) {
@@ -1292,7 +1396,15 @@ $("monitorVarsTable").addEventListener("input", event => {
   if (!editor) return;
   const row = editor.closest("tr");
   const item = monitoredVariables[Number(row.dataset.index)];
-  if (item) item.draft = editor.value;
+  if (!item) return;
+  const elementIndex = row.dataset.elementIndex === ""
+    ? null
+    : Number(row.dataset.elementIndex);
+  if (elementIndex === null) item.draft = editor.value;
+  else {
+    item.drafts ||= {};
+    item.drafts[elementIndex] = editor.value;
+  }
 });
 
 $("monitorVarsTable").addEventListener("click", async event => {
@@ -1301,6 +1413,9 @@ $("monitorVarsTable").addEventListener("click", async event => {
   const index = Number(row.dataset.index);
   const item = monitoredVariables[index];
   if (!item) return;
+  const elementIndex = row.dataset.elementIndex === ""
+    ? null
+    : Number(row.dataset.elementIndex);
 
   if (event.target.closest(".monitor-remove")) {
     monitoredVariables.splice(index, 1);
@@ -1323,9 +1438,11 @@ $("monitorVarsTable").addEventListener("click", async event => {
     const response = await post("/api/server/variable", {
       node_id: item.node_id,
       value: editor.value,
+      index: elementIndex,
     }, 7000);
     item.value = response.value;
-    item.draft = null;
+    if (elementIndex === null) item.draft = null;
+    else if (item.drafts) delete item.drafts[elementIndex];
     item.offline = false;
     item.missing = false;
     variablePage.items.forEach(pageItem => {
@@ -1334,7 +1451,10 @@ $("monitorVarsTable").addEventListener("click", async event => {
     updateMonitorRows();
     renderServerVariables();
     monitorMessage(
-      `${item.name} 已写入，服务器回读值为 ${formatVariableValue(response.value)}。`,
+      `${item.name}${elementIndex === null ? "" : `[${elementIndex + 1}]`} 已写入，` +
+      `服务器回读值为 ${formatVariableValue(
+        elementIndex === null ? response.value : response.element_value
+      )}。`,
       "success"
     );
   } catch (e) {

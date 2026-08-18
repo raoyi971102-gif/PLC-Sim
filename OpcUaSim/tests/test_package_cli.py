@@ -54,6 +54,7 @@ def test_cli_help_lists_all_installed_commands(capsys):
     assert "server" in output
     assert "handshake" in output
     assert "szlab-handshake" in output
+    assert "ptlc-handshake" in output
     assert "ino" in output
 
 

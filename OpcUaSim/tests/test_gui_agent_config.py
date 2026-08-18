@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from gui.backend import AgentStartReq, SZLAB_WORKFLOW_IDS, _extend_szlab_command
+from gui.backend import (
+    AgentStartReq, SZLAB_WORKFLOW_IDS, _extend_ptlc_command, _extend_szlab_command,
+    api_version,
+)
 from szlab_handshake_agent import WORKFLOW_IDS
 
 
@@ -120,6 +124,37 @@ def test_szlab_agent_options_are_forwarded_to_cli() -> None:
         "--s09-balance-reading",
         "2.5",
     ]
+
+
+def test_ptlc_agent_only_forwards_generic_timing_options() -> None:
+    req = AgentStartReq(
+        profile="ptlc", workflow="unknown_szlab_workflow",
+        delay_ms=75, poll_ms=10, position=4,
+    )
+    cmd = ["python", "ptlc_handshake_agent.py"]
+    options = _extend_ptlc_command(cmd, req)
+    assert cmd == [
+        "python", "ptlc_handshake_agent.py",
+        "--delay-ms", "75", "--poll-ms", "10",
+    ]
+    assert options == {"delay_ms": 75, "poll_ms": 10}
+
+
+def test_ptlc_profiles_are_selectable_in_gui() -> None:
+    root = Path(__file__).parents[1]
+    html = (root / "gui" / "static" / "index.html").read_text(encoding="utf-8")
+    app_js = (root / "gui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert html.count('<option value="ptlc">') == 2
+    assert "config/ptlc_nodes.yaml" in app_js
+    assert "config/ptlc_handshake.yaml" in app_js
+    assert "requireBackendCapability" in app_js
+    assert "data-element-index" in app_js
+    assert "element_value" in app_js
+    capabilities = asyncio.run(api_version())["capabilities"]
+    assert capabilities == {
+        "ptlc_server_profile": True,
+        "ptlc_handshake_agent": True,
+    }
 
 
 def test_szlab_agent_rejects_unknown_workflow() -> None:

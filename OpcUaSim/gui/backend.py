@@ -51,6 +51,7 @@ try:
         connection_state_path,
         default_csv_path,
         load_csvs,
+        load_ptlc_nodes,
         node_defs_fingerprint,
         runtime_data_dir,
     )
@@ -75,6 +76,7 @@ except ImportError:  # Direct `python -m gui.backend` compatibility.
         connection_state_path,
         default_csv_path,
         load_csvs,
+        load_ptlc_nodes,
         node_defs_fingerprint,
         runtime_data_dir,
     )
@@ -454,6 +456,10 @@ def _read_release() -> str:
 
 
 _RELEASE = _read_release()
+_BACKEND_CAPABILITIES = {
+    "ptlc_server_profile": True,
+    "ptlc_handshake_agent": True,
+}
 
 
 @app.get("/api/version")
@@ -469,6 +475,7 @@ async def api_version() -> Dict[str, Any]:
         "release": _RELEASE,
         "backend_started": _BACKEND_START_TS,
         "backend_pid": os.getpid(),
+        "capabilities": _BACKEND_CAPABILITIES,
         "static_mtime": {
             "index.html": _mtime("index.html"),
             "style.css":  _mtime("style.css"),
@@ -1078,6 +1085,7 @@ async def api_csv_upload(req: CsvUploadReq) -> Dict[str, Any]:
 
 class ServerStartReq(BaseModel):
     csv: Optional[str] = None     # 不给则用上次提取结果或内置演示表
+    profile: str = "csv"
     host: str = "0.0.0.0"
     port: int = 4855
     ns_index: int = 4
@@ -1094,22 +1102,36 @@ async def api_server_start(req: ServerStartReq) -> Dict[str, Any]:
         raise HTTPException(400, "Server 已在运行；请先停止")
     _STATE.server_proc = None
     _clear_server_metadata(remove_connection_state=True)
-    csv_path = req.csv or _STATE.last_extract_csv or str(default_csv_path())
+    profile = (req.profile or "csv").strip().lower()
+    if profile not in {"csv", "ptlc"}:
+        raise HTTPException(400, f"未知 Server profile: {profile}")
+    default_path = (
+        _ROOT / "config" / "ptlc_nodes.yaml"
+        if profile == "ptlc"
+        else Path(_STATE.last_extract_csv or default_csv_path())
+    )
+    csv_path = req.csv or str(default_path)
     if not Path(csv_path).exists():
-        raise HTTPException(400, f"CSV 不存在: {csv_path}")
+        raise HTTPException(400, f"节点表不存在: {csv_path}")
     resolved_csv = str(Path(csv_path).resolve())
     try:
-        node_defs = await asyncio.to_thread(load_csvs, [Path(resolved_csv)])
+        if profile == "ptlc":
+            node_defs = await asyncio.to_thread(
+                load_ptlc_nodes, Path(resolved_csv), req.ns_index
+            )
+        else:
+            node_defs = await asyncio.to_thread(load_csvs, [Path(resolved_csv)])
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(400, f"CSV 解析失败: {exc}") from exc
+        raise HTTPException(400, f"节点表解析失败: {exc}") from exc
     if not node_defs:
-        raise HTTPException(400, "CSV 中没有可用的 VARIABLE 节点")
+        raise HTTPException(400, f"{profile} 节点表中没有可用的 VARIABLE 节点")
 
     cmd = runtime_command(
         "server",
         _ROOT / "server.py",
         [
             "--host", req.host, "--port", str(req.port),
+            "--profile", profile,
             "--csv", resolved_csv,
             "--ns-index", str(req.ns_index), "--ns-uri", req.ns_uri,
             "--connection-state", str(connection_state_path()),
@@ -1176,6 +1198,11 @@ def _coerce_node_value(data_type: str, raw: Any) -> Any:
         if normalized in {"false", "0", "no", "off"}:
             return False
         raise ValueError("BOOLEAN 仅接受 true/false 或 1/0")
+    if data_type == "BYTE":
+        value = int(raw)
+        if not 0 <= value <= 255:
+            raise ValueError("BYTE 超出范围 0..255")
+        return value
     if data_type == "INT16":
         value = int(raw)
         if not -32768 <= value <= 32767:
@@ -1186,10 +1213,10 @@ def _coerce_node_value(data_type: str, raw: Any) -> Any:
         if not -2147483648 <= value <= 2147483647:
             raise ValueError("INT32 超出范围")
         return value
-    if data_type == "FLOAT":
+    if data_type in {"FLOAT", "DOUBLE"}:
         value = float(raw)
         if not math.isfinite(value):
-            raise ValueError("FLOAT 必须是有限数值")
+            raise ValueError(f"{data_type} 必须是有限数值")
         return value
     if data_type == "STRING":
         return str(raw)
@@ -1203,6 +1230,49 @@ def _write_node_value(url: str, node_def: NodeDef, value: Any) -> Any:
         node = client.get_node(node_def.node_id)
         node.set_value(ua.Variant(value, VTYPE_MAP[node_def.data_type]))
         return node.get_value()
+    finally:
+        with contextlib.suppress(Exception):
+            client.disconnect()
+
+
+def _replace_array_element(
+    node_def: NodeDef,
+    current: Any,
+    index: int,
+    raw_value: Any,
+) -> List[Any]:
+    """校验并生成单元素更新后的完整数组；不改变调用方传入的当前值。"""
+    if node_def.array_len <= 0:
+        raise ValueError(f"{node_def.name_cn} 不是数组节点")
+    if not isinstance(current, (list, tuple)) or len(current) != node_def.array_len:
+        actual = len(current) if isinstance(current, (list, tuple)) else "非数组"
+        raise ValueError(
+            f"{node_def.name_cn} 在线数组长度异常：期望 {node_def.array_len}，实际 {actual}"
+        )
+    if not 0 <= index < node_def.array_len:
+        raise ValueError(f"数组下标必须在 0..{node_def.array_len - 1} 之间")
+    updated = list(current)
+    updated[index] = _coerce_node_value(node_def.data_type, raw_value)
+    return updated
+
+
+def _write_node_element(
+    url: str,
+    node_def: NodeDef,
+    index: int,
+    raw_value: Any,
+) -> tuple[Any, Any]:
+    """单连接内读整组、改一个元素、写整组并回读确认。"""
+    client = Client(url, timeout=4)
+    try:
+        client.connect()
+        node = client.get_node(node_def.node_id)
+        updated = _replace_array_element(node_def, node.get_value(), index, raw_value)
+        node.set_value(ua.Variant(updated, VTYPE_MAP[node_def.data_type]))
+        confirmed = node.get_value()
+        if not isinstance(confirmed, (list, tuple)) or len(confirmed) != node_def.array_len:
+            raise RuntimeError(f"{node_def.name_cn} 写后回读不是长度 {node_def.array_len} 的数组")
+        return confirmed, confirmed[index]
     finally:
         with contextlib.suppress(Exception):
             client.disconnect()
@@ -1245,6 +1315,7 @@ async def api_server_variables(
             "name": node_def.name_cn,
             "english_name": node_def.name_en,
             "data_type": node_def.data_type,
+            "array_len": node_def.array_len,
             "node_id": node_def.node_id,
             "value": value,
         }
@@ -1291,6 +1362,7 @@ async def api_server_variables_read(req: ServerVariablesReadReq) -> Dict[str, An
             "name": node_def.name_cn,
             "english_name": node_def.name_en,
             "data_type": node_def.data_type,
+            "array_len": node_def.array_len,
             "node_id": node_def.node_id,
             "value": value,
         }
@@ -1302,6 +1374,7 @@ async def api_server_variables_read(req: ServerVariablesReadReq) -> Dict[str, An
 class ServerVariableWriteReq(BaseModel):
     node_id: str
     value: Any
+    index: Optional[int] = Field(default=None, ge=0)
 
 
 @app.post("/api/server/variable")
@@ -1315,19 +1388,45 @@ async def api_server_variable_write(req: ServerVariableWriteReq) -> Dict[str, An
     if node_def is None:
         raise HTTPException(404, "变量不在当前 Server 的 CSV 定义中")
     try:
-        typed_value = _coerce_node_value(node_def.data_type, req.value)
+        if req.index is not None:
+            if not node_def.array_len:
+                raise ValueError(f"{node_def.name_cn} 不是数组节点，不能指定 index")
+            if req.index >= node_def.array_len:
+                raise ValueError(f"数组下标必须在 0..{node_def.array_len - 1} 之间")
+            typed_value = None
+        elif node_def.array_len:
+            raw_values = req.value
+            if isinstance(raw_values, str):
+                raw_values = json.loads(raw_values)
+            if not isinstance(raw_values, list) or len(raw_values) != node_def.array_len:
+                raise ValueError(f"数组长度必须为 {node_def.array_len}")
+            typed_value = [
+                _coerce_node_value(node_def.data_type, item) for item in raw_values
+            ]
+        else:
+            typed_value = _coerce_node_value(node_def.data_type, req.value)
     except (TypeError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
     assert _STATE.server_client_url is not None
     try:
         async with _STATE.server_io_lock:
-            confirmed = await asyncio.to_thread(
-                _write_node_value,
-                _STATE.server_client_url,
-                node_def,
-                typed_value,
-            )
+            if req.index is None:
+                confirmed = await asyncio.to_thread(
+                    _write_node_value,
+                    _STATE.server_client_url,
+                    node_def,
+                    typed_value,
+                )
+                element_value = None
+            else:
+                confirmed, element_value = await asyncio.to_thread(
+                    _write_node_element,
+                    _STATE.server_client_url,
+                    node_def,
+                    req.index,
+                    req.value,
+                )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"写入 OPC UA 变量失败: {exc}") from exc
 
@@ -1337,6 +1436,9 @@ async def api_server_variable_write(req: ServerVariableWriteReq) -> Dict[str, An
         "node_id": node_def.node_id,
         "name": node_def.name_cn,
         "data_type": node_def.data_type,
+        "array_len": node_def.array_len,
+        "index": req.index,
+        "element_value": element_value,
         "value": confirmed,
     }
 
@@ -1383,6 +1485,17 @@ def _extend_szlab_command(cmd: List[str], req: AgentStartReq) -> Dict[str, Any]:
     return options
 
 
+def _extend_ptlc_command(cmd: List[str], req: AgentStartReq) -> Dict[str, Any]:
+    """附加 PTLC 通用状态机参数；SZLab 专属工作流字段不会传入。"""
+    options: Dict[str, Any] = {}
+    for field_name, flag in (("delay_ms", "--delay-ms"), ("poll_ms", "--poll-ms")):
+        value = getattr(req, field_name)
+        if value is not None:
+            options[field_name] = value
+            cmd.extend([flag, str(value)])
+    return options
+
+
 @app.post("/api/agent/start")
 async def api_agent_start(req: AgentStartReq) -> Dict[str, Any]:
     if _STATE.attached:
@@ -1391,18 +1504,23 @@ async def api_agent_start(req: AgentStartReq) -> Dict[str, Any]:
         raise HTTPException(400, "Handshake Agent 已在运行")
     url = f"opc.tcp://{req.host}:{req.port}/xuse_sim/"
     profile = (req.profile or "szlab").strip().lower()
-    if profile != "szlab":
-        raise HTTPException(400, "未知握手仿真类型，仅支持 szlab")
-
+    if profile not in {"szlab", "ptlc"}:
+        raise HTTPException(400, "未知握手仿真类型，仅支持 szlab/ptlc")
+    command = "ptlc-handshake" if profile == "ptlc" else "szlab-handshake"
+    script = "ptlc_handshake_agent.py" if profile == "ptlc" else "szlab_handshake_agent.py"
     cmd = runtime_command(
-        "szlab-handshake",
-        _ROOT / "szlab_handshake_agent.py",
+        command,
+        _ROOT / script,
         ["--url", url],
         python_executable=_find_python_exe(),
     )
     if req.config:
         cmd.extend(["--config", req.config])
-    options = _extend_szlab_command(cmd, req)
+    options = (
+        _extend_ptlc_command(cmd, req)
+        if profile == "ptlc"
+        else _extend_szlab_command(cmd, req)
+    )
 
     log.info("启动 Handshake Agent: %s", " ".join(cmd))
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

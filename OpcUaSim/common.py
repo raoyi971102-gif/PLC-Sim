@@ -21,7 +21,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from opcua import ua
 
@@ -99,9 +99,11 @@ def connection_state_path() -> Path:
 # ---------------------------------------------------------------------------
 VTYPE_MAP: Dict[str, ua.VariantType] = {
     "BOOLEAN": ua.VariantType.Boolean,
+    "BYTE":    ua.VariantType.Byte,
     "INT16":   ua.VariantType.Int16,
     "INT32":   ua.VariantType.Int32,
     "FLOAT":   ua.VariantType.Float,
+    "DOUBLE":  ua.VariantType.Double,
     "STRING":  ua.VariantType.String,
 }
 SZLAB_TYPE_MAP: Dict[str, str] = {
@@ -113,10 +115,22 @@ SZLAB_TYPE_MAP: Dict[str, str] = {
 }
 DEFAULT_MAP: Dict[str, Any] = {
     "BOOLEAN": False,
+    "BYTE":    0,
     "INT16":   0,
     "INT32":   0,
     "FLOAT":   0.0,
+    "DOUBLE":  0.0,
     "STRING":  "",
+}
+
+PTLC_TYPE_MAP: Dict[str, str] = {
+    "BOOLEAN": "BOOLEAN",
+    "BYTE": "BYTE",
+    "INT16": "INT16",
+    "INT32": "INT32",
+    "FLOAT": "FLOAT",
+    "DOUBLE": "DOUBLE",
+    "STRING": "STRING",
 }
 
 
@@ -130,6 +144,9 @@ class NodeDef:
     node_type: str        # VARIABLE / METHOD
     data_type: str        # BOOLEAN / INT16 / ...
     node_id: str          # ns=4;s=uniab|<name_cn>
+    array_len: int = 0    # 0=标量，>0=固定长度真数组
+    browse_path: Tuple[str, ...] = ()  # Objects 下的父对象 BrowseName 路径
+    initial_value: Any = None
 
 
 def node_defs_fingerprint(nodes: Sequence[NodeDef]) -> str:
@@ -145,6 +162,8 @@ def node_defs_fingerprint(nodes: Sequence[NodeDef]) -> str:
             node.name_en,
             node.node_type,
             node.data_type,
+            node.array_len,
+            node.browse_path,
         )
         for node in nodes
     )
@@ -222,6 +241,47 @@ def load_csv(path: Path) -> List[NodeDef]:
         nodes.append(NodeDef(name_cn, name_en, ntype, dtype, nid))
     log.info("CSV 解析完成：共 %d 个 VARIABLE 节点", len(nodes))
     return nodes
+
+
+def load_ptlc_nodes(path: Path, ns_index: int = 4) -> List[NodeDef]:
+    """读取自包含的 PTLC ``plc_nodes.yaml`` 协议快照。
+
+    文件格式与 PTLC V2 的节点表兼容，但 PLC-Sim 只消费 ``gvl_path``、
+    ``nodes.*.type`` 和 ``array_len``，因此运行时无需安装或导入 PTLC。
+    """
+    if yaml is None:
+        raise RuntimeError("PTLC profile 需要 PyYAML")
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    browse_path = tuple(str(part) for part in payload.get("gvl_path", ()))
+    if not browse_path:
+        raise ValueError(f"PTLC 节点表缺少 gvl_path: {path}")
+    raw_nodes = payload.get("nodes")
+    if not isinstance(raw_nodes, dict) or not raw_nodes:
+        raise ValueError(f"PTLC 节点表缺少 nodes: {path}")
+
+    result: List[NodeDef] = []
+    for name, raw_spec in raw_nodes.items():
+        spec = raw_spec if isinstance(raw_spec, dict) else {"type": raw_spec}
+        raw_type = str(spec.get("type", "")).upper()
+        data_type = PTLC_TYPE_MAP.get(raw_type)
+        if data_type is None:
+            raise ValueError(f"PTLC 节点 {name} 使用未知类型: {raw_type!r}")
+        array_len = int(spec.get("array_len", 0) or 0)
+        if array_len < 0:
+            raise ValueError(f"PTLC 节点 {name} 的 array_len 不能为负数")
+        initial = spec.get("initial_value")
+        result.append(NodeDef(
+            name_cn=str(name),
+            name_en=str(spec.get("comment", "")),
+            node_type="VARIABLE",
+            data_type=data_type,
+            node_id=f"ns={ns_index};s=ptlc|{name}",
+            array_len=array_len,
+            browse_path=browse_path,
+            initial_value=initial,
+        ))
+    log.info("PTLC 节点表解析完成：%d 个节点，GVL=%s", len(result), "/".join(browse_path))
+    return result
 
 
 def load_csvs(csv_paths: List[Path]) -> List[NodeDef]:
