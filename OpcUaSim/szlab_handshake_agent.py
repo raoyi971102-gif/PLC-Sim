@@ -534,8 +534,9 @@ def s09_transfer_sensor(product_type: int, position: int) -> str:
             return S09_STATION_SENSOR[position]
         except KeyError as exc:
             raise ValueError("S09 液体试剂瓶位置必须在 1-5 范围内") from exc
-    if product_type == 3 and position == 1:
-        # S09 的烧杯位没有独立在位传感器。NO[7] 属于 1 号试剂瓶位；
+    if product_type in {3, 4} and position == 1:
+        # S09 的加液烧杯（3）和密度烧杯（4）共用物理 BEAKER1，
+        # 且该烧杯位没有独立在位传感器。NO[7] 属于 1 号试剂瓶位；
         # 若烧杯取放也改写它，随后向 REAGENT1 放瓶会被误判为库位已占用。
         return ""
     raise ValueError("S09 取放料产品/位置不合法")
@@ -1755,6 +1756,23 @@ class WorkflowHandshakeSimulator:
             return int(self.adapter.read(S08_POUR_PRODUCT) or 0), ""
         raise ValueError(f"不支持的机器人任务号: {task}")
 
+    def _settled_robot_task_position_and_sensor(
+        self,
+        task: int,
+    ) -> tuple[int, str] | None:
+        """读取一个已完整写入的机器人任务参数快照。
+
+        Edge 通过多个独立 OPC UA 写操作提交任务。状态机可能在旧的
+        ``Robot_任务写入完成=True`` 尚未被消费时，先看到已复位为零的
+        产品/位置参数。该组合只是写入途中的瞬时快照，不能让 Handshake
+        Agent 崩溃，也不能被接纳为物理任务；参数稳定后由下一轮重新读取。
+        """
+
+        try:
+            return self._robot_task_position_and_sensor(task)
+        except (TypeError, ValueError, RuntimeError):
+            return None
+
     def _robot_site_witness_enabled(self, sensor: str) -> bool:
         """判断本次机器人动作是否由 PLC-SIM 管理库位在位见证。
 
@@ -1901,15 +1919,17 @@ class WorkflowHandshakeSimulator:
             write_done = bool(self.adapter.read(ROBOT_WRITE_DONE))
             task = int(self.adapter.read(ROBOT_TASK_NUMBER) or 0)
             if write_done and self._robot_task_supported(task):
-                position, sensor = self._robot_task_position_and_sensor(task)
-                events.append(
-                    self._begin_robot_task(
-                        now=now,
-                        task=task,
-                        position=position,
-                        sensor=sensor,
+                settled = self._settled_robot_task_position_and_sensor(task)
+                if settled is not None:
+                    position, sensor = settled
+                    events.append(
+                        self._begin_robot_task(
+                            now=now,
+                            task=task,
+                            position=position,
+                            sensor=sensor,
+                        )
                     )
-                )
         elif cycle.phase == "executing" and now >= cycle.due_at:
             # 任务类型决定动作完成后的库位占用和夹爪持料物理证据。
             task_kind = STANDARD_ROBOT_TASK_KIND.get(cycle.process)
@@ -1971,6 +1991,13 @@ class WorkflowHandshakeSimulator:
                 and task != cycle.process
                 and self._robot_task_supported(task)
             )
+            settled = (
+                self._settled_robot_task_position_and_sensor(task)
+                if next_task
+                else None
+            )
+            if next_task and settled is None:
+                return events
             if not write_done or next_task:
                 previous_task = cycle.process
                 self.adapter.write(ROBOT_TASK_COMPLETE, 0)
@@ -1985,7 +2012,8 @@ class WorkflowHandshakeSimulator:
                     )
                 )
                 if next_task:
-                    position, sensor = self._robot_task_position_and_sensor(task)
+                    assert settled is not None
+                    position, sensor = settled
                     events.append(
                         self._begin_robot_task(
                             now=now,
@@ -2010,6 +2038,13 @@ class WorkflowHandshakeSimulator:
                 and task != cycle.process
                 and self._robot_task_supported(task)
             )
+            settled = (
+                self._settled_robot_task_position_and_sensor(task)
+                if next_task
+                else None
+            )
+            if next_task and settled is None:
+                return events
             if not write_done or next_task:
                 previous_task = cycle.process
                 previous_reason = cycle.rejection_reason
@@ -2027,7 +2062,8 @@ class WorkflowHandshakeSimulator:
                     )
                 )
                 if next_task:
-                    position, sensor = self._robot_task_position_and_sensor(task)
+                    assert settled is not None
+                    position, sensor = settled
                     events.append(
                         self._begin_robot_task(
                             now=now,

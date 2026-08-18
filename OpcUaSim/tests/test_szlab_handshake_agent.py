@@ -835,6 +835,67 @@ def test_robot_handshake_accepts_next_task_when_reset_pulse_is_overtaken() -> No
     ]
 
 
+def test_robot_handshake_waits_for_complete_s09_parameter_snapshot() -> None:
+    """旧完成沿与已复位 S09 参数并存时应等待稳定快照，不能退出 Agent。"""
+
+    adapter = MemoryAdapter()
+    simulator = handshake.WorkflowHandshakeSimulator(
+        adapter,
+        process_delay=0.5,
+        workflow=handshake.SINGLE_SAMPLE_WORKFLOW,
+    )
+    simulator.initialize()
+
+    # 模拟 OPC UA 多节点写入窗口：任务号和旧 True 已可见，产品/位置仍为 0。
+    adapter.write(handshake.ROBOT_TASK_NUMBER, 20)
+    adapter.write(handshake.S09_TRANSFER_PRODUCT, 0)
+    adapter.write(handshake.S09_TRANSFER_POSITION, 0)
+    adapter.write(handshake.ROBOT_WRITE_DONE, True)
+
+    assert simulator.step(now=0.0) == []
+    assert simulator.robot.phase == "idle"
+    assert adapter.read(handshake.ROBOT_HOME) is True
+
+    # 下一轮参数完整后，同一任务正常接纳；前一次瞬时快照没有产生物理动作。
+    adapter.write(handshake.S09_TRANSFER_PRODUCT, 3)
+    adapter.write(handshake.S09_TRANSFER_POSITION, 1)
+    events = simulator.step(now=0.1)
+
+    assert [(event.phase, event.detail["task_number"]) for event in events] == [
+        ("accepted", 20)
+    ]
+    assert simulator.robot.phase == "executing"
+
+
+def test_s09_transfer_accepts_addition_and_density_beakers_at_shared_site() -> None:
+    """SZLab 协议中产品 3/4 都是 S09 BEAKER1，且都无独立在位信号。"""
+
+    assert handshake.s09_transfer_sensor(3, 1) == ""
+    assert handshake.s09_transfer_sensor(4, 1) == ""
+
+
+def test_robot_handshake_accepts_s09_density_beaker_transfer() -> None:
+    adapter = MemoryAdapter()
+    simulator = handshake.WorkflowHandshakeSimulator(
+        adapter,
+        process_delay=0.5,
+        workflow=handshake.SINGLE_SAMPLE_WORKFLOW,
+    )
+    simulator.initialize()
+
+    adapter.write(handshake.ROBOT_TASK_NUMBER, 19)
+    adapter.write(handshake.S09_TRANSFER_PRODUCT, 4)
+    adapter.write(handshake.S09_TRANSFER_POSITION, 1)
+    adapter.write(handshake.ROBOT_WRITE_DONE, True)
+
+    events = simulator.step(now=0.0)
+
+    assert [(event.phase, event.detail["task_number"]) for event in events] == [
+        ("accepted", 19)
+    ]
+    assert simulator.robot.phase == "executing"
+
+
 def test_single_sample_initialize_and_cleanup_reset_s11_output_slots() -> None:
     adapter = MemoryAdapter()
     simulator = handshake.WorkflowHandshakeSimulator(
