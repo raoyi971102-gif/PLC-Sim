@@ -1773,14 +1773,27 @@ class WorkflowHandshakeSimulator:
         except (TypeError, ValueError, RuntimeError):
             return None
 
-    def _robot_site_witness_enabled(self, sensor: str) -> bool:
+    def _robot_site_witness_enabled(self, task: int, sensor: str) -> bool:
         """判断本次机器人动作是否由 PLC-SIM 管理库位在位见证。
 
-        参数：``sensor`` 是任务号解析出的在位传感器节点名；空串表示现场无独立见证。
+        参数：``task`` 是机器人任务号，``sensor`` 是解析出的在位传感器节点名；
+        空串表示现场无独立见证。
         返回：需在接单与完成时校验、更新该传感器时返回 ``True``。
         """
 
-        return bool(sensor) and not (
+        if not sensor:
+            return False
+        if (
+            self.workflow in SINGLE_SAMPLE_WORKFLOWS
+            and task in {15, 16}
+            and sensor == S072_SENSOR_BY_POSITION[1]
+        ):
+            # 单样品工作流的 S0721、P01、P02 是三个 Backend Site，但 PLC
+            # 表只给它们一个共享在位点。该点不能区分逻辑占用，强行用它做
+            # 准入会把第二次合法搬运误判为重复放料；实际占用由 Backend
+            # 的 Site 锁、预留和物料 ledger 关闭失败地校验。
+            return False
+        return not (
             self.workflow == BEAKER_TRANSFER_CHAIN_WORKFLOW
             and sensor in BEAKER_TRANSFER_UNWITNESSED_SITE_SENSORS
         )
@@ -1809,7 +1822,7 @@ class WorkflowHandshakeSimulator:
 
         task_kind = STANDARD_ROBOT_TASK_KIND.get(task)
         site_witness_enabled = bool(sensor) and self._robot_site_witness_enabled(
-            sensor
+            task, sensor
         )
         tool_witness_enabled = self._robot_tool_witness_enabled()
         detail: dict[str, Any] = {
@@ -1934,7 +1947,9 @@ class WorkflowHandshakeSimulator:
             # 任务类型决定动作完成后的库位占用和夹爪持料物理证据。
             task_kind = STANDARD_ROBOT_TASK_KIND.get(cycle.process)
             occupied = task_kind == "place"
-            site_witness_enabled = self._robot_site_witness_enabled(cycle.sensor)
+            site_witness_enabled = self._robot_site_witness_enabled(
+                cycle.process, cycle.sensor
+            )
             if cycle.sensor and site_witness_enabled:
                 self.adapter.write(cycle.sensor, occupied)
             tool_holding: bool | None = None
