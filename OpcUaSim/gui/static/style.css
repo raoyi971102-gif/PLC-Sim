@@ -620,6 +620,31 @@ tbody tr:hover td { background: var(--unilab-color-device-soft); }
 .code-editor { min-width: 0; display: flex; flex-direction: column; }
 .editor-toolbar { display: flex; align-items: flex-end; gap: 9px; }
 .path-field { flex: 1; }
+.editor-assist {
+  margin-top: 12px;
+  padding: 7px 9px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  color: var(--unilab-color-text-muted);
+  border: 1px solid var(--unilab-color-border);
+  border-radius: var(--unilab-radius-control);
+  background: var(--unilab-color-bg-subtle);
+  font-size: 11px;
+}
+.editor-assist > span:first-child { color: var(--unilab-color-device); font-weight: 700; }
+.editor-assist kbd {
+  min-width: 20px;
+  padding: 1px 5px;
+  display: inline-block;
+  border: 1px solid var(--unilab-color-border-strong);
+  border-radius: var(--unilab-radius-sm);
+  color: var(--unilab-color-text);
+  background: var(--unilab-color-surface);
+  font: 10px/1.4 var(--unilab-font-mono);
+  text-align: center;
+}
 .kind-badge, .pid-badge, .count-badge, .connection-badge {
   padding: 5px 8px;
   border: 1px solid var(--unilab-color-border);

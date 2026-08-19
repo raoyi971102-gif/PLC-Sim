@@ -211,14 +211,21 @@
             <button id="btnGetPou" class="btn">读取</button>
             <span id="pouKindBadge" class="kind-badge">未选择</span>
           </div>
+          <div id="stEditorHelp" class="editor-assist" aria-label="Structured Text 编辑快捷键">
+            <span>Structured Text 智能编辑</span>
+            <span><kbd>Tab</kbd> 缩进</span>
+            <span><kbd>Shift</kbd> + <kbd>Tab</kbd> 反缩进</span>
+            <span><kbd>Enter</kbd> 块对齐</span>
+            <span><kbd>Ctrl/⌘</kbd> + <kbd>/</kbd> 行注释</span>
+          </div>
           <div class="code-grid">
             <label class="field code-field">
               <span>声明区</span>
-              <textarea id="pouDecl" spellcheck="false" placeholder="VAR&#10;    ...&#10;END_VAR"></textarea>
+              <textarea id="pouDecl" data-st-editor data-tab-size="4" aria-describedby="stEditorHelp" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="VAR&#10;    ...&#10;END_VAR"></textarea>
             </label>
             <label class="field code-field">
               <span>实现区</span>
-              <textarea id="pouImpl" spellcheck="false" placeholder="(* Structured Text implementation *)"></textarea>
+              <textarea id="pouImpl" data-st-editor data-tab-size="4" aria-describedby="stEditorHelp" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="(* Structured Text implementation *)"></textarea>
             </label>
           </div>
           <div class="editor-footer">
@@ -597,6 +604,7 @@
 
   <!-- 普通脚本按功能依赖顺序加载；无需 Node/Vite 构建即可离线运行。 -->
   <script src="/static/app.js"></script>
+  <script src="/static/st-editor.js"></script>
   <script src="/static/project.js"></script>
   <script src="/static/simulation.js"></script>
   <script src="/static/variables.js"></script>

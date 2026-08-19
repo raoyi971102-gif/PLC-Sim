@@ -8,6 +8,7 @@ from gui.backend import _root, app
 STATIC_DIRECTORY = Path(__file__).parents[1] / "gui" / "static"
 SCRIPT_ORDER = (
     "app.js",
+    "st-editor.js",
     "project.js",
     "simulation.js",
     "variables.js",
@@ -54,3 +55,15 @@ def test_frontend_features_live_in_their_own_script_modules() -> None:
     for filename, marker in features.items():
         assert marker not in core
         assert marker in (STATIC_DIRECTORY / filename).read_text(encoding="utf-8")
+
+
+def test_structured_text_editor_is_a_separate_frontend_module() -> None:
+    """POU 的 IDE 键盘能力独立于工程读写，并挂载到两个代码区。"""
+
+    html = (STATIC_DIRECTORY / "index.html").read_text(encoding="utf-8")
+    editor = (STATIC_DIRECTORY / "st-editor.js").read_text(encoding="utf-8")
+
+    assert html.count("data-st-editor") == 2
+    assert 'event.key === "Tab"' in editor
+    assert 'event.key === "Enter"' in editor
+    assert "toggleLineComments" in editor

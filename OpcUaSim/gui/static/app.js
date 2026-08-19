@@ -5,7 +5,7 @@
 
 // 版本 marker —— F12 Console 里能看到. 如果你看到的是旧样式但这一行没打印,
 // 说明你的浏览器根本没执行这份 app.js (纯缓存旧文件).
-const GUI_BUILD = "2026-08-19_unilab-style";
+const GUI_BUILD = "2026-08-19_st-editor";
 console.log("%c[OpcUaSim] GUI build " + GUI_BUILD, "color:#0f766e;font-weight:bold");
 
 const $ = (id) => document.getElementById(id);
