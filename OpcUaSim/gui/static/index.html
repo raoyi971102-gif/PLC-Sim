@@ -11,8 +11,8 @@
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">UA</div>
       <div>
-        <div class="brand-title">OPC UA 工程控制台</div>
-        <div class="brand-subtitle">PLC 变量工程、程序块维护与仿真服务</div>
+        <div class="brand-title">Uni-Lab 调试台</div>
+        <div class="brand-subtitle">OPC UA 工程控制台</div>
       </div>
     </div>
     <div class="status-cluster" aria-label="运行状态">
@@ -57,16 +57,19 @@
   </section>
 
   <nav class="tabs" aria-label="功能分区">
-    <button class="tab active" data-tab="extract">
-      <span>提取变量</span>
+    <button class="tab active" data-tab="extract" aria-current="page">
+      <span class="tab-icon" aria-hidden="true">GVL</span>
+      <span class="tab-label">提取变量</span>
       <small>GVL 与 CSV</small>
     </button>
     <button class="tab" data-tab="edit">
-      <span>编辑程序块</span>
+      <span class="tab-icon" aria-hidden="true">POU</span>
+      <span class="tab-label">程序块</span>
       <small>POU / GVL / DUT</small>
     </button>
     <button class="tab" data-tab="sim">
-      <span>OPC UA 仿真</span>
+      <span class="tab-icon" aria-hidden="true">UA</span>
+      <span class="tab-label">仿真服务</span>
       <small>服务、代理与在线变量</small>
     </button>
   </nav>

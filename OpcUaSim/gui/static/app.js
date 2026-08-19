@@ -5,8 +5,8 @@
 
 // 版本 marker —— F12 Console 里能看到. 如果你看到的是旧样式但这一行没打印,
 // 说明你的浏览器根本没执行这份 app.js (纯缓存旧文件).
-const GUI_BUILD = "2026-08-18_modular-gui";
-console.log("%c[OpcUaSim] GUI build " + GUI_BUILD, "color:#3ecf8e;font-weight:bold");
+const GUI_BUILD = "2026-08-19_unilab-style";
+console.log("%c[OpcUaSim] GUI build " + GUI_BUILD, "color:#0f766e;font-weight:bold");
 
 const $ = (id) => document.getElementById(id);
 const el = (sel, ctx = document) => ctx.querySelector(sel);
@@ -63,7 +63,8 @@ async function requireBackendCapability(name, label) {
 
 function showResult(node, ok, text) {
   if (node.classList.contains("inline-result")) {
-    node.style.color = ok ? "#86efac" : "#fda4af";
+    node.classList.toggle("success", ok);
+    node.classList.toggle("error", !ok);
   } else {
     node.className = "result-box " + (ok ? "success" : "error");
   }
@@ -174,7 +175,7 @@ function renderState(s) {
   const stateMessage = s.last_error || (s.busy ? `正在${s.busy}` : "");
   $("topBusy").textContent = stateMessage;
   $("topBusy").classList.toggle("hidden", !stateMessage);
-  $("topBusy").style.color = s.last_error ? "#fda4af" : "#fcd34d";
+  $("topBusy").classList.toggle("error", Boolean(s.last_error));
   $("pidServer").textContent = s.server.pid ? `PID ${s.server.pid}` : "PID --";
   $("pidAgent").textContent = s.agent.pid ? `PID ${s.agent.pid}` : "PID --";
   $("serverEndpoint").textContent = s.server.endpoint || "未启动";
@@ -213,9 +214,13 @@ async function refreshState() {
 
 // ---------------- 标签切换 ----------------
 els(".tab").forEach(t => t.addEventListener("click", () => {
-  els(".tab").forEach(x => x.classList.remove("active"));
+  els(".tab").forEach(x => {
+    x.classList.remove("active");
+    x.removeAttribute("aria-current");
+  });
   els(".panel").forEach(x => x.classList.remove("active"));
   t.classList.add("active");
+  t.setAttribute("aria-current", "page");
   $("tab-" + t.dataset.tab).classList.add("active");
   el(".workspace").scrollTop = 0;
   if (t.dataset.tab === "sim" && currentAppState?.server?.running) {

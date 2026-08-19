@@ -72,7 +72,7 @@ setInterval(refreshState, 2000);
     badge.onclick = () => alert(JSON.stringify(v, null, 2));
   } catch (e) {
     badge.textContent = "build ? (无法拉 /api/version: " + e.message + ")";
-    badge.style.color = "#e0665b";
+    badge.classList.add("error");
   }
 })();
 
