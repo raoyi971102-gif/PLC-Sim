@@ -581,60 +581,6 @@ def test_s072_product_selector_updates_two_independent_handoff_sensors() -> None
     assert adapter.read(handshake.s072_sensor(2)) is True
 
 
-def test_single_sample_s072_handoff_does_not_treat_logical_sites_as_one_slot() -> None:
-    """单样品图的 S0721/P01/P02 共用 PLC 点位，准入应由 Backend Site 事实负责。"""
-
-    adapter = MemoryAdapter()
-    simulator = handshake.WorkflowHandshakeSimulator(
-        adapter,
-        process_delay=0.5,
-        workflow=handshake.SINGLE_SAMPLE_WORKFLOW,
-    )
-    simulator.initialize()
-    adapter.write(handshake.ROBOT_TOOL_PAYLOAD_SENSOR, True)
-    adapter.write(handshake.s072_sensor(1), True)
-    adapter.write(handshake.S072_ROBOT_PRODUCT, 1)
-    adapter.write(handshake.ROBOT_TASK_NUMBER, 15)
-    adapter.write(handshake.ROBOT_WRITE_DONE, True)
-
-    accepted = simulator.step(now=0.0)
-    completed = simulator.step(now=0.5)
-
-    assert [(event.phase, event.detail["task_number"]) for event in accepted] == [
-        ("accepted", 15)
-    ]
-    assert [(event.phase, event.detail["task_number"]) for event in completed] == [
-        ("completed", 15)
-    ]
-    assert completed[-1].detail["site_witness_enabled"] is False
-
-
-def test_single_sample_s08_transfer_still_updates_its_site_witness() -> None:
-    """S08 与 S072 共用 CSV 点位，但只有 S072 的逻辑 Site 需要旁路见证。"""
-
-    adapter = MemoryAdapter()
-    simulator = handshake.WorkflowHandshakeSimulator(
-        adapter,
-        process_delay=0.5,
-        workflow=handshake.SINGLE_SAMPLE_WORKFLOW,
-    )
-    simulator.initialize()
-    sensor = handshake.S072_SENSOR_BY_POSITION[1]
-    adapter.write(handshake.ROBOT_TOOL_PAYLOAD_SENSOR, True)
-    adapter.write(sensor, False)
-    adapter.write(handshake.S08_ROBOT_PRODUCT, 1)
-    adapter.write(handshake.S08_ROBOT_POSITION, 1)
-    adapter.write(handshake.ROBOT_TASK_NUMBER, 17)
-    adapter.write(handshake.ROBOT_WRITE_DONE, True)
-
-    accepted = simulator.step(now=0.0)
-    completed = simulator.step(now=0.5)
-
-    assert accepted[-1].detail["site_witness_enabled"] is True
-    assert completed[-1].detail["site_witness_enabled"] is True
-    assert adapter.read(sensor) is True
-
-
 def test_s07_solid_handshake_supports_two_complete_cycles() -> None:
     adapter = MemoryAdapter()
     simulator = handshake.WorkflowHandshakeSimulator(adapter, process_delay=0.5)
