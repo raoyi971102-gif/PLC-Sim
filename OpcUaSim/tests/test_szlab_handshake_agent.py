@@ -872,6 +872,150 @@ def test_selected_workflow_only_initializes_and_polls_its_components() -> None:
     simulator.step(now=0.0)
 
 
+def test_package_mode_keeps_all_components_and_all_s04_positions_active() -> None:
+    """单一设备包会话可并行推进不同协议，不再由工作流选择裁剪处理器。"""
+
+    adapter = MemoryAdapter()
+    for position in range(1, 7):
+        adapter.write(handshake.s04_process(position), 0)
+        adapter.write(handshake.s04_params_written(position), False)
+        adapter.write(handshake.s04_duration(position), 1000)
+    simulator = handshake.WorkflowHandshakeSimulator(
+        adapter,
+        workflow="szlab_magnetic_stirring_workflow",
+        package_mode=True,
+        process_delay=0.5,
+        time_scale=2,
+    )
+    simulator.initialize()
+
+    assert simulator.enabled_components == handshake.ALL_COMPONENTS
+    assert set(simulator.stirrers) == set(range(1, 7))
+    for position in range(1, 7):
+        assert adapter.read(handshake.s04_allow(position)) is True
+        assert adapter.read(handshake.s04_sensor(position)) is (position == 1)
+
+    adapter.write(handshake.s04_process(2), 3)
+    adapter.write(handshake.s04_params_written(2), True)
+    adapter.write(handshake.S06_PROCESS, 1)
+    adapter.write(handshake.S06_PARAMS_WRITTEN, True)
+
+    accepted = simulator.step(now=0.0)
+    assert {(event.action, event.phase) for event in accepted} == {
+        (handshake.S04_STIR_ACTION, "accepted"),
+        (handshake.S06_PUMP_ACTION, "accepted"),
+    }
+    assert simulator.step(now=0.25)[0].action == handshake.S06_PUMP_ACTION
+    stir_completed = simulator.step(now=0.5)
+    assert stir_completed[0].action == handshake.S04_STIR_ACTION
+    assert stir_completed[0].detail["position"] == 2
+    assert simulator.protocol_snapshot()["mode"] == "package"
+
+
+def test_one_package_session_runs_every_opc_protocol_family_without_restart() -> None:
+    """新 Workflow 只要组合已建模动作，就可复用同一设备包会话。"""
+
+    adapter = MemoryAdapter()
+    for position in range(1, 7):
+        adapter.write(handshake.s04_process(position), 0)
+        adapter.write(handshake.s04_params_written(position), False)
+        adapter.write(handshake.s04_duration(position), 0)
+    simulator = handshake.WorkflowHandshakeSimulator(
+        adapter,
+        workflow="all",
+        package_mode=True,
+        process_delay=0,
+    )
+    simulator.initialize()
+
+    def finish_cycle(
+        request: dict[str, Any],
+        reset: dict[str, Any],
+        now: float,
+    ) -> list[handshake.HandshakeEvent]:
+        for name, value in request.items():
+            adapter.write(name, value)
+        accepted = simulator.step(now=now)
+        completed = simulator.step(now=now)
+        for name, value in reset.items():
+            adapter.write(name, value)
+        reset_events = simulator.step(now=now)
+        assert [event.phase for event in accepted] == ["accepted"]
+        assert [event.phase for event in completed] == ["completed"]
+        assert [event.phase for event in reset_events] == ["reset"]
+        return [*accepted, *completed, *reset_events]
+
+    event_groups = [
+        finish_cycle(
+            {
+                handshake.ROBOT_TASK_NUMBER: 1,
+                handshake.ROBOT_WRITE_DONE: True,
+            },
+            {
+                handshake.ROBOT_TASK_NUMBER: 0,
+                handshake.ROBOT_WRITE_DONE: False,
+            },
+            1.0,
+        ),
+        finish_cycle(
+            {
+                handshake.s04_process(2): 3,
+                handshake.s04_params_written(2): True,
+            },
+            {
+                handshake.s04_process(2): 0,
+                handshake.s04_params_written(2): False,
+            },
+            2.0,
+        ),
+        finish_cycle(
+            {handshake.S06_PROCESS: 1, handshake.S06_PARAMS_WRITTEN: True},
+            {handshake.S06_PROCESS: 0, handshake.S06_PARAMS_WRITTEN: False},
+            3.0,
+        ),
+        finish_cycle(
+            {handshake.S07_PROCESS: 1, handshake.S07_PARAMS_WRITTEN: True},
+            {handshake.S07_PROCESS: 0, handshake.S07_PARAMS_WRITTEN: False},
+            4.0,
+        ),
+        finish_cycle(
+            {
+                handshake.S08_PROCESS: 1,
+                handshake.S08_PARAMS_WRITTEN: True,
+                handshake.S08_CAP_STORAGE_SLOT: 1,
+            },
+            {
+                handshake.S08_PROCESS: 0,
+                handshake.S08_PARAMS_WRITTEN: False,
+                handshake.S08_CAP_STORAGE_SLOT: 0,
+            },
+            5.0,
+        ),
+        finish_cycle(
+            {handshake.S09_PROCESS: 5, handshake.S09_PARAMS_WRITTEN: True},
+            {handshake.S09_PROCESS: 0, handshake.S09_PARAMS_WRITTEN: False},
+            6.0,
+        ),
+    ]
+
+    completed_actions = {
+        event.action
+        for group in event_groups
+        for event in group
+        if event.phase == "completed"
+    }
+    assert completed_actions == {
+        "szlab_mixer_robot.pick",
+        handshake.S04_STIR_ACTION,
+        handshake.S06_PUMP_ACTION,
+        "szlab_s07_solid_addition.scan_powder_cartridges",
+        handshake.S08_CAP_ACTION,
+        handshake.S09_ADD_LIQUID_ACTION,
+    }
+    assert simulator.completed_actions == 6
+    assert simulator.all_cycles_idle() is True
+
+
 def test_s04_completion_uses_driver_duration_instead_of_default_delay() -> None:
     adapter = MemoryAdapter()
     simulator = handshake.WorkflowHandshakeSimulator(

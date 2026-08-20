@@ -110,6 +110,7 @@ class AppState:
     server_proc: subprocess.Popen | None = None
     agent_proc: subprocess.Popen | None = None
     agent_profile: str | None = None
+    agent_state_file: str | None = None
     ptlc_fault_file: str | None = None
     ptlc_state_file: str | None = None
     attached: bool = False
@@ -167,6 +168,7 @@ class AppState:
                 "stopping": "agent_proc" in self.stopping,
                 "attached": self.attached,
                 "profile": self.agent_profile,
+                "state": read_json_file(self.agent_state_file),
                 "ptlc_state": read_json_file(self.ptlc_state_file),
             },
             "last_extract_csv": self.last_extract_csv,

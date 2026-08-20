@@ -38,6 +38,7 @@ from .agent_routes import (
     api_agent_stop,
     api_ptlc_agent_fault,
     api_ptlc_agent_state,
+    api_szlab_agent_state,
 )
 from .agent_routes import (
     router as agent_router,
@@ -134,6 +135,7 @@ log = logging.getLogger("gui")
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _BACKEND_START_TS = time.time()
 _BACKEND_CAPABILITIES = {
+    "szlab_package_runtime": True,
     "ptlc_server_profile": True,
     "ptlc_handshake_agent": True,
     "ptlc_write_ownership": True,

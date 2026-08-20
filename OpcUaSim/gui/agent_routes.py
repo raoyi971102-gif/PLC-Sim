@@ -61,6 +61,7 @@ class AgentStartReq(BaseModel):
     host: str = "127.0.0.1"
     port: int = 4855
     config: str | None = None  # 可选 yaml
+    package_config: str | None = None  # SZLab 设备包世界状态配置
     csv: str | None = None  # 兼容旧 GUI 字段；SZLab 代理不读 CSV
     profile: str = "szlab"
     workflow: str | None = None
@@ -69,14 +70,25 @@ class AgentStartReq(BaseModel):
     delay_ms: int | None = Field(default=None, ge=0, le=3_600_000)
     poll_ms: int | None = Field(default=None, ge=5, le=60_000)
     time_scale: float | None = Field(default=None, gt=0, le=1000)
+    s1_host: str | None = None
+    s1_port: int | None = Field(default=None, ge=1, le=65535)
     s09_remaining_volume_ml: float | None = Field(default=None, gt=0)
     s07_balance_reading: float | None = None
     s09_balance_reading: float | None = None
 
 
 def _extend_szlab_command(cmd: list[str], req: AgentStartReq) -> dict[str, Any]:
-    """校验并附加 SZLab 工作流调试参数，返回实际生效的显式覆盖项。"""
+    """附加 SZLab 设备包与兼容场景参数，返回实际生效的显式覆盖项。"""
     options: dict[str, Any] = {}
+    if req.package_config:
+        options["package_config"] = req.package_config
+        cmd.extend(["--package-config", req.package_config])
+    if req.s1_host:
+        options["s1_host"] = req.s1_host
+        cmd.extend(["--s1-host", req.s1_host])
+    if req.s1_port is not None:
+        options["s1_port"] = req.s1_port
+        cmd.extend(["--s1-port", str(req.s1_port)])
     if req.workflow:
         if req.workflow not in ("all", *SZLAB_WORKFLOW_IDS, *SZLAB_WORKFLOW_ALIASES):
             raise HTTPException(400, f"未知 SZLab 工作流: {req.workflow}")
@@ -97,6 +109,9 @@ def _extend_szlab_command(cmd: list[str], req: AgentStartReq) -> dict[str, Any]:
         if value is not None:
             options[field_name] = value
             cmd.extend([flag, str(value)])
+    if req.time_scale is not None:
+        options["time_scale"] = req.time_scale
+        cmd.extend(["--time-scale", str(req.time_scale)])
     return options
 
 
@@ -158,9 +173,15 @@ async def api_agent_start(req: AgentStartReq) -> dict[str, Any]:
         cmd.extend(["--fault-file", str(fault_file), "--state-file", str(state_file)])
         STATE.ptlc_fault_file = str(fault_file)
         STATE.ptlc_state_file = str(state_file)
+        STATE.agent_state_file = str(state_file)
     else:
         STATE.ptlc_fault_file = None
         STATE.ptlc_state_file = None
+        runtime_root = runtime_data_dir() / "runtime"
+        state_file = runtime_root / "szlab-package-state.json"
+        write_json_file(state_file, {})
+        cmd.extend(["--state-file", str(state_file)])
+        STATE.agent_state_file = str(state_file)
 
     log.info("启动 Handshake Agent: %s", " ".join(cmd))
     proc = await asyncio.to_thread(
@@ -199,6 +220,21 @@ async def api_agent_stop() -> dict[str, Any]:
     result = await stop_subprocess("agent_proc")
     STATE.agent_profile = None
     return result
+
+
+@router.get("/api/agent/szlab/state")
+async def api_szlab_agent_state() -> dict[str, Any]:
+    """返回 SZLab 设备包会话快照和代理存活状态。"""
+
+    return {
+        "ok": True,
+        "running": bool(
+            STATE.agent_profile == "szlab"
+            and STATE.agent_proc
+            and STATE.agent_proc.poll() is None
+        ),
+        "state": read_json_file(STATE.agent_state_file),
+    }
 
 
 class PtlcFaultReq(BaseModel):

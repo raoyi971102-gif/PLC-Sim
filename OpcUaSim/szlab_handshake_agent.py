@@ -64,15 +64,23 @@ import argparse
 import json
 import signal
 import sys
+import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Literal, Protocol
+from typing import Any, Literal, Protocol
 
 try:
     from .common import load_yaml
+    from .package_simulation import write_snapshot_atomic
+    from .szlab_package_runtime import SzlabPackageRuntime, default_package_config_path
+    from .szlab_s1_sim import S1SimulationServer
 except ImportError:  # Direct ``python szlab_handshake_agent.py`` compatibility.
     from common import load_yaml
+    from package_simulation import write_snapshot_atomic
+    from szlab_package_runtime import SzlabPackageRuntime, default_package_config_path
+    from szlab_s1_sim import S1SimulationServer
 
 DEFAULT_URL = "opc.tcp://opcua.ideawit.com:4855/xuse_sim"
 DEFAULT_NODE_PREFIX = "ns=4;s=上位机通讯|"
@@ -1222,7 +1230,11 @@ class _Cycle:
 
 
 class WorkflowHandshakeSimulator:
-    """覆盖仓库全部工作流动作的独立 PLC 握手状态机。"""
+    """覆盖 SZLab 全部 PLC 协议族的握手状态机。
+
+    ``package_mode=True`` 时工作流仅作为初始场景标签，Robot 与 S04-S09
+    始终常驻；默认 False 保持现有单元测试和第三方源码调用的兼容语义。
+    """
 
     def __init__(
         self,
@@ -1239,6 +1251,8 @@ class WorkflowHandshakeSimulator:
         s07_balance_reading: float = 1.0,
         s09_balance_reading: float = 1.0,
         workflow: str | None = None,
+        package_mode: bool = False,
+        time_scale: float = 1.0,
     ) -> None:
         if int(position) not in range(1, 7):
             raise ValueError("position 必须在 1-6 范围内")
@@ -1248,6 +1262,8 @@ class WorkflowHandshakeSimulator:
         selected_workflow = WORKFLOW_ALIASES.get(requested_workflow, requested_workflow)
         if selected_workflow not in ("all", *WORKFLOW_IDS):
             raise ValueError(f"不支持的握手工作流: {requested_workflow}")
+        if float(time_scale) <= 0:
+            raise ValueError("仿真时间倍率必须大于 0")
         self.adapter = adapter
         self.position = int(position)
         self.pump = int(pump)
@@ -1257,6 +1273,8 @@ class WorkflowHandshakeSimulator:
         }
         self.initial_value_overrides = dict(initial_values or {})
         self.workflow = selected_workflow
+        self.package_mode = bool(package_mode)
+        self.time_scale = float(time_scale)
         self.s06_robot_workflow = bool(
             s06_robot_workflow
             or selected_workflow
@@ -1277,7 +1295,11 @@ class WorkflowHandshakeSimulator:
         if self.s09_pipetting_workflow and self.s09_remaining_volume_ml <= 0:
             raise ValueError("S09 初始液体余量必须大于 0 mL")
         self.robot = _Cycle()
-        self.stirrer = _Cycle(position=self.position)
+        self.stirrers = {
+            position_id: _Cycle(position=position_id) for position_id in range(1, 7)
+        }
+        # 源码级兼容：旧调用方仍可读取所选调试位的单周期属性。
+        self.stirrer = self.stirrers[self.position]
         self.pump_cycle = _Cycle(process=self.pump)
         self.s07_cycle = _Cycle()
         self.s08_cycle = _Cycle()
@@ -1287,6 +1309,14 @@ class WorkflowHandshakeSimulator:
 
     @property
     def enabled_components(self) -> frozenset[str]:
+        if self.package_mode or self.workflow == "all":
+            return ALL_COMPONENTS
+        return WORKFLOW_COMPONENTS[self.workflow]
+
+    @property
+    def scenario_components(self) -> frozenset[str]:
+        """返回初始场景实际需要的组件，不影响设备包处理器常驻。"""
+
         if self.workflow == "all":
             return ALL_COMPONENTS
         return WORKFLOW_COMPONENTS[self.workflow]
@@ -1300,6 +1330,7 @@ class WorkflowHandshakeSimulator:
         """
 
         components = self.enabled_components
+        scenario_components = self.scenario_components
         values: dict[str, Any] = {}
         if components & ROBOT_COMPONENTS:
             values.update(
@@ -1346,19 +1377,27 @@ class WorkflowHandshakeSimulator:
                 }
             )
         if "robot_s04" in components:
-            values[s04_sensor(self.position)] = False
+            for position_id in (
+                range(1, 7) if self.package_mode else (self.position,)
+            ):
+                values[s04_sensor(position_id)] = False
         if "stirrer" in components:
-            values.update(
-                {
-                    s04_sensor(self.position): not (
-                        "robot_s04" in components
-                        or self.workflow in SINGLE_SAMPLE_WORKFLOWS
-                    ),
-                    s04_allow(self.position): True,
-                    s04_status(self.position): 1,
-                    s04_done(self.position): False,
-                }
-            )
+            for position_id in (
+                range(1, 7) if self.package_mode else (self.position,)
+            ):
+                values.update(
+                    {
+                        s04_sensor(position_id): not (
+                            "robot_s04" in scenario_components
+                            or self.workflow in SINGLE_SAMPLE_WORKFLOWS
+                        )
+                        and "stirrer" in scenario_components
+                        and position_id == self.position,
+                        s04_allow(position_id): True,
+                        s04_status(position_id): 1,
+                        s04_done(position_id): False,
+                    }
+                )
         if "photo" in components:
             values.update(
                 {
@@ -1487,16 +1526,22 @@ class WorkflowHandshakeSimulator:
                 }
             )
         if "robot_s04" in components:
-            values[s04_sensor(self.position)] = False
+            for position_id in (
+                range(1, 7) if self.package_mode else (self.position,)
+            ):
+                values[s04_sensor(position_id)] = False
         if "stirrer" in components:
-            values.update(
-                {
-                    s04_sensor(self.position): False,
-                    s04_allow(self.position): False,
-                    s04_status(self.position): 0,
-                    s04_done(self.position): False,
-                }
-            )
+            for position_id in (
+                range(1, 7) if self.package_mode else (self.position,)
+            ):
+                values.update(
+                    {
+                        s04_sensor(position_id): False,
+                        s04_allow(position_id): False,
+                        s04_status(position_id): 0,
+                        s04_done(position_id): False,
+                    }
+                )
         if "photo" in components:
             values.update(
                 {
@@ -1603,7 +1648,10 @@ class WorkflowHandshakeSimulator:
         if components & ROBOT_COMPONENTS:
             events.extend(self._step_robot(now))
         if "stirrer" in components:
-            events.extend(self._step_stirrer(now))
+            for position_id in (
+                range(1, 7) if self.package_mode else (self.position,)
+            ):
+                events.extend(self._step_stirrer(now, position_id))
         if "pump" in components:
             events.extend(self._step_pump(now))
         if "s07" in components:
@@ -1623,7 +1671,12 @@ class WorkflowHandshakeSimulator:
         if components & ROBOT_COMPONENTS:
             cycles.append(self.robot)
         if "stirrer" in components:
-            cycles.append(self.stirrer)
+            cycles.extend(
+                self.stirrers[position_id]
+                for position_id in (
+                    range(1, 7) if self.package_mode else (self.position,)
+                )
+            )
         if "pump" in components:
             cycles.append(self.pump_cycle)
         if "s07" in components:
@@ -1656,7 +1709,7 @@ class WorkflowHandshakeSimulator:
             return position, s03_sensor(product_type, position)
         if task in (7, 8):
             position = int(self.adapter.read(S04_ROBOT_POSITION) or 0)
-            if position != self.position:
+            if not self.package_mode and position != self.position:
                 raise RuntimeError(
                     f"机器人 S04 位置不匹配：脚本监听 {self.position}，收到 {position}"
                 )
@@ -1862,21 +1915,26 @@ class WorkflowHandshakeSimulator:
             return "szlab_mixer_robot.submit_pour_from_s08"
         return ROBOT_ACTION_BY_TASK[task]
 
-    def _step_stirrer(self, now: float) -> list[HandshakeEvent]:
-        cycle = self.stirrer
+    def _step_stirrer(
+        self, now: float, position: int | None = None
+    ) -> list[HandshakeEvent]:
+        """推进指定 S04 位置；设备包模式会在每轮扫描全部六个位置。"""
+
+        position_id = self.position if position is None else int(position)
+        cycle = self.stirrers[position_id]
         events: list[HandshakeEvent] = []
-        params_name = s04_params_written(self.position)
-        process_name = s04_process(self.position)
+        params_name = s04_params_written(position_id)
+        process_name = s04_process(position_id)
         if cycle.phase == "idle":
             params_written = bool(self.adapter.read(params_name))
             process = int(self.adapter.read(process_name) or 0)
             if params_written and process in (1, 2, 3):
-                self.adapter.write(s04_allow(self.position), False)
-                self.adapter.write(s04_status(self.position), 2)
-                self.adapter.write(s04_done(self.position), False)
+                self.adapter.write(s04_allow(position_id), False)
+                self.adapter.write(s04_status(position_id), 2)
+                self.adapter.write(s04_done(position_id), False)
                 cycle.phase = "executing"
                 cycle.process = process
-                cycle.duration_seconds = self._stirrer_duration_seconds()
+                cycle.duration_seconds = self._stirrer_duration_seconds(position_id)
                 cycle.due_at = now + cycle.duration_seconds
                 events.append(
                     HandshakeEvent(
@@ -1884,14 +1942,14 @@ class WorkflowHandshakeSimulator:
                         "accepted",
                         {
                             "process": process,
-                            "position": self.position,
+                            "position": position_id,
                             "duration_seconds": cycle.duration_seconds,
                         },
                     )
                 )
         elif cycle.phase == "executing" and now >= cycle.due_at:
-            self.adapter.write(s04_done(self.position), True)
-            self.adapter.write(s04_status(self.position), 1)
+            self.adapter.write(s04_done(position_id), True)
+            self.adapter.write(s04_status(position_id), 1)
             cycle.phase = "await_reset"
             events.append(
                 HandshakeEvent(
@@ -1899,7 +1957,7 @@ class WorkflowHandshakeSimulator:
                     "completed",
                     {
                         "process": cycle.process,
-                        "position": self.position,
+                        "position": position_id,
                         "duration_seconds": cycle.duration_seconds,
                     },
                 )
@@ -1908,14 +1966,14 @@ class WorkflowHandshakeSimulator:
             params_written = bool(self.adapter.read(params_name))
             process = int(self.adapter.read(process_name) or 0)
             if not params_written and process == 0:
-                self.adapter.write(s04_done(self.position), False)
-                self.adapter.write(s04_allow(self.position), True)
-                self.adapter.write(s04_status(self.position), 1)
+                self.adapter.write(s04_done(position_id), False)
+                self.adapter.write(s04_allow(position_id), True)
+                self.adapter.write(s04_status(position_id), 1)
                 events.append(
                     HandshakeEvent(
                         self._stirrer_action(),
                         "reset",
-                        {"process": cycle.process, "position": self.position},
+                        {"process": cycle.process, "position": position_id},
                     )
                 )
                 cycle.phase = "idle"
@@ -2219,16 +2277,48 @@ class WorkflowHandshakeSimulator:
         return S09_ADD_LIQUID_ACTION
 
     def _delay_seconds(self, group: str) -> float:
-        return self.delays.get(group, self.process_delay)
+        simulated_seconds = self.delays.get(group, self.process_delay)
+        return simulated_seconds / self.time_scale
 
-    def _stirrer_duration_seconds(self) -> float:
+    def _stirrer_duration_seconds(self, position: int | None = None) -> float:
         """优先采用驱动写入的 S04 毫秒时长，节点缺失时回退配置延时。"""
 
+        position_id = self.position if position is None else int(position)
         try:
-            duration_ms = float(self.adapter.read(s04_duration(self.position)))
+            duration_ms = float(self.adapter.read(s04_duration(position_id)))
         except (KeyError, TypeError, ValueError, RuntimeError):
             return self._delay_seconds("stirrer")
-        return max(duration_ms, 0.0) / 1000.0
+        return max(duration_ms, 0.0) / 1000.0 / self.time_scale
+
+    def protocol_snapshot(self) -> dict[str, Any]:
+        """返回无需读 OPC UA 的协议周期状态，供 GUI 和诊断持久化。"""
+
+        def cycle_state(cycle: _Cycle) -> dict[str, Any]:
+            return {
+                "phase": cycle.phase,
+                "process": cycle.process,
+                "position": cycle.position,
+                "sensor": cycle.sensor,
+                "duration_seconds": cycle.duration_seconds,
+            }
+
+        return {
+            "mode": "package" if self.package_mode else "legacy-workflow",
+            "scenario": self.workflow,
+            "enabled_components": sorted(self.enabled_components),
+            "completed_actions": self.completed_actions,
+            "cycles": {
+                "robot": cycle_state(self.robot),
+                "stirrer": {
+                    str(position): cycle_state(cycle)
+                    for position, cycle in self.stirrers.items()
+                },
+                "pump": cycle_state(self.pump_cycle),
+                "s07": cycle_state(self.s07_cycle),
+                "s08": cycle_state(self.s08_cycle),
+                "s09": cycle_state(self.s09_cycle),
+            },
+        }
 
 
 def _print_catalog(specs: tuple[WorkflowSpec, ...]) -> None:
@@ -2300,10 +2390,27 @@ def build_parser() -> argparse.ArgumentParser:
         default="serve",
     )
     parser.add_argument("--config", default=_config_path(), help="YAML 配置文件")
+    parser.add_argument(
+        "--package-config",
+        default=None,
+        help="设备包级世界状态与覆盖配置；默认使用内置 config/szlab_package.yaml",
+    )
+    parser.add_argument(
+        "--state-file",
+        default=None,
+        help="原子写入设备包运行状态 JSON，供 GUI/诊断读取",
+    )
     parser.add_argument("--url", default="opc.tcp://127.0.0.1:4855/xuse_sim/")
     parser.add_argument("--node-prefix", default=None)
     parser.add_argument("--username", default=None)
     parser.add_argument("--password", default=None)
+    parser.add_argument("--s1-host", default=None, help="S1 HTTP stand-in 监听地址")
+    parser.add_argument("--s1-port", type=int, default=None, help="S1 HTTP stand-in 监听端口")
+    parser.add_argument(
+        "--no-s1-http",
+        action="store_true",
+        help="不启动设备包自带的 S1 HTTP stand-in",
+    )
     parser.add_argument("--position", type=int, default=None, help="S04 位置，1-6")
     parser.add_argument("--pump", type=int, default=None, choices=(1, 2, 3))
     parser.add_argument("--poll-interval", type=float, default=None)
@@ -2318,10 +2425,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--delay-ms", type=int, default=None, help="统一动作延时（毫秒）"
     )
     parser.add_argument(
+        "--time-scale",
+        type=float,
+        default=None,
+        help="仿真时间倍率，必须大于 0；动作参数时长和配置延时统一生效",
+    )
+    parser.add_argument(
         "--workflow",
         choices=("all", *WORKFLOW_IDS, *WORKFLOW_ALIASES),
         default=None,
-        help="只列出/检查指定工作流；serve 时同时启用该场景所需的特殊初始化",
+        help="list/check 的工作流过滤器；serve 设备包模式中仅作为兼容初始场景",
+    )
+    parser.add_argument(
+        "--legacy-workflow-mode",
+        action="store_true",
+        help="恢复旧版只启用所选工作流协议的行为；默认一次启动全部设备协议",
     )
     parser.add_argument(
         "--s06-robot-workflow",
@@ -2384,6 +2502,18 @@ def main(argv: list[str] | None = None) -> int:
     if selected_workflow not in ("all", *WORKFLOW_IDS):
         print(f"不支持的握手工作流: {requested_workflow}", file=sys.stderr)
         return 2
+    package_mode = (
+        not args.legacy_workflow_mode
+        and str(config.get("mode", "package")).strip().lower() == "package"
+    )
+    time_scale = (
+        float(args.time_scale)
+        if args.time_scale is not None
+        else float(config.get("time_scale", 1.0))
+    )
+    if time_scale <= 0:
+        print("仿真时间倍率必须大于 0", file=sys.stderr)
+        return 2
 
     if args.delay_ms is not None:
         process_delay = max(args.delay_ms, 0) / 1000.0
@@ -2436,7 +2566,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     specs = build_workflow_specs(position=position, pump=pump)
-    if selected_workflow != "all":
+    if selected_workflow != "all" and args.command in {"list", "check"}:
         specs = tuple(spec for spec in specs if spec.workflow_id == selected_workflow)
     if args.command == "list":
         _print_catalog(specs)
@@ -2468,10 +2598,78 @@ def main(argv: list[str] | None = None) -> int:
             s07_balance_reading=s07_balance_reading,
             s09_balance_reading=s09_balance_reading,
             workflow=requested_workflow,
+            package_mode=package_mode,
+            time_scale=time_scale,
         )
+        package_runtime = SzlabPackageRuntime(
+            config_path=args.package_config or default_package_config_path(),
+            scenario=selected_workflow,
+            time_scale=time_scale,
+        )
+        s1_config = dict(config.get("s1_http", {}))
+        s1_enabled = (
+            package_mode
+            and not args.no_s1_http
+            and bool(s1_config.get("enabled", True))
+        )
+        s1_server: S1SimulationServer | None = None
+        snapshot_lock = threading.RLock()
+
+        def publish_state() -> None:
+            if args.state_file:
+                with snapshot_lock:
+                    protocol_snapshot = simulator.protocol_snapshot()
+                    if s1_server is not None:
+                        protocol_snapshot["s1_http"] = s1_server.snapshot()
+                    write_snapshot_atomic(
+                        args.state_file,
+                        package_runtime.snapshot(protocol_snapshot),
+                    )
+
+        def observe_s1(
+            action: str, phase: str, detail: dict[str, Any]
+        ) -> None:
+            package_runtime.observe_external(action, phase, detail)
+            publish_state()
+
+        if s1_enabled:
+            s1_server = S1SimulationServer(
+                host=args.s1_host or str(s1_config.get("host", "127.0.0.1")),
+                port=(
+                    int(args.s1_port)
+                    if args.s1_port is not None
+                    else int(s1_config.get("port", 8055))
+                ),
+                event_sink=observe_s1,
+            )
+            try:
+                s1_server.start()
+            except OSError as exc:
+                print(f"S1 HTTP stand-in 启动失败: {exc}", file=sys.stderr)
+                package_runtime.runtime.world.update_device(
+                    "s1_workstation",
+                    state="failed",
+                    error=str(exc),
+                )
+                package_runtime.stop()
+                publish_state()
+                return 4
+            package_runtime.runtime.world.update_device(
+                "s1_workstation",
+                state="ready",
+                endpoint=s1_server.endpoint,
+            )
+            print(f"S1 HTTP stand-in 已启动: {s1_server.endpoint}")
+
+        # 即使显式禁止 OPC UA 初始化，GUI 也应立即看到会话身份与覆盖报告。
+        publish_state()
+
         if not args.no_initialize:
-            print(f"写入握手场景 {selected_workflow!r} 的仿真先决条件...")
+            mode_label = "设备包" if package_mode else f"握手场景 {selected_workflow!r}"
+            print(f"写入 {mode_label} 的仿真先决条件...")
             simulator.initialize()
+            package_runtime.initialize_protocol(simulator.initialization_values())
+            publish_state()
             checks = simulator.check_supported_prerequisites()
             failed = [item for item in checks if not item[1]]
             for name, passed, expected, actual in checks:
@@ -2481,9 +2679,16 @@ def main(argv: list[str] | None = None) -> int:
                 )
             if failed:
                 print("先决条件写入后校验失败，拒绝进入握手循环", file=sys.stderr)
+                if s1_server is not None:
+                    s1_server.stop()
+                package_runtime.stop()
+                publish_state()
                 return 3
 
-        print("握手仿真器已启动；按 Ctrl+C 停止。")
+        if package_mode:
+            print("SZLab 设备包仿真器已启动；Robot 与 S04-S09 全部常驻，按 Ctrl+C 停止。")
+        else:
+            print("兼容工作流握手仿真器已启动；按 Ctrl+C 停止。")
         print("S05 为只读完成信号，已保持 S05加工完成=True、S05拍照结果=1。")
         stop_requested = False
 
@@ -2499,8 +2704,12 @@ def main(argv: list[str] | None = None) -> int:
             pass
         try:
             while not stop_requested:
-                for event in simulator.step():
+                events = simulator.step()
+                for event in events:
+                    package_runtime.observe(event)
                     print(_event_line(event), flush=True)
+                if events:
+                    publish_state()
                 if (
                     args.max_actions > 0
                     and simulator.completed_actions >= args.max_actions
@@ -2523,6 +2732,10 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 print("恢复仿真器负责的 PLC→PC 信号...")
                 simulator.cleanup()
+            if s1_server is not None:
+                s1_server.stop()
+            package_runtime.stop()
+            publish_state()
         return 0
     finally:
         adapter.disconnect()

@@ -4,7 +4,7 @@
 
 ## 目录
 
-- [`OpcUaSim`](./OpcUaSim/)：CSV 驱动的 OPC UA Server、四类握手代理及 Web GUI。
+- [`OpcUaSim`](./OpcUaSim/)：CSV 驱动的 OPC UA Server、PTLC/SZLab 仿真运行时及 Web GUI。SZLab 默认一次启动整个设备包，常驻 Robot、S04-S09 和 S1 HTTP Adapter。
 
 项目已经包含公开演示变量表和 Python 依赖声明。源码运行仅支持 Python 3.11.x：
 

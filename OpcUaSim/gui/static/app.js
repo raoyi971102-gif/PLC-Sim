@@ -5,7 +5,7 @@
 
 // 版本 marker —— F12 Console 里能看到. 如果你看到的是旧样式但这一行没打印,
 // 说明你的浏览器根本没执行这份 app.js (纯缓存旧文件).
-const GUI_BUILD = "2026-08-19_st-editor";
+const GUI_BUILD = "2026-08-20_szlab-package-runtime";
 console.log("%c[OpcUaSim] GUI build " + GUI_BUILD, "color:#0f766e;font-weight:bold");
 
 const $ = (id) => document.getElementById(id);
@@ -178,6 +178,26 @@ function renderState(s) {
   $("topBusy").classList.toggle("error", Boolean(s.last_error));
   $("pidServer").textContent = s.server.pid ? `PID ${s.server.pid}` : "PID --";
   $("pidAgent").textContent = s.agent.pid ? `PID ${s.agent.pid}` : "PID --";
+  const runtime = s.agent.state || s.agent.ptlc_state || null;
+  const runtimeNode = $("agentRuntimeSummary");
+  if (runtimeNode) {
+    if (s.agent.profile === "szlab" && runtime?.schema === "unilab.package_simulation/v1") {
+      const active = Array.isArray(runtime.active_runs) ? runtime.active_runs.length : 0;
+      const coverage = runtime.coverage?.counts || {};
+      runtimeNode.textContent =
+        `设备包会话 ${runtime.state || "running"} · 活动动作 ${active} · ` +
+        `事件 ${Number(runtime.sequence || 0)} · 已建模 ${Number(coverage.modeled || 0)} · ` +
+        `外部适配 ${Number(coverage.external || 0)}`;
+      runtimeNode.classList.add("success");
+      runtimeNode.classList.remove("error");
+    } else if (s.agent.running) {
+      runtimeNode.textContent = "代理已启动，等待首个运行状态快照";
+      runtimeNode.classList.remove("success", "error");
+    } else {
+      runtimeNode.textContent = "尚未启动仿真会话";
+      runtimeNode.classList.remove("success", "error");
+    }
+  }
   $("serverEndpoint").textContent = s.server.endpoint || "未启动";
   renderServerConnections(s.server);
   syncMonitorProfile(s.server.csv_id, s.server.running);

@@ -25,6 +25,8 @@ from szlab_handshake_agent import (
     S09_WORKFLOW,
     OpcUaVariableAdapter,
     WorkflowHandshakeSimulator,
+    s04_done,
+    s04_duration,
     s04_params_written,
     s04_process,
     s04_sensor,
@@ -229,6 +231,70 @@ def test_attachment_flow_skips_scan_on_a_real_opcua_s07_cycle() -> None:
             clock += 1.0
 
         assert "szlab_s07_solid_addition.scan_powder_cartridges" not in observed_actions
+    finally:
+        adapter.disconnect()
+        server.stop()
+
+
+def test_one_package_session_runs_s04_and_s06_without_workflow_restart() -> None:
+    """设备包模式经真实 OPC UA 同时响应两个协议族和任意 S04 位置。"""
+
+    seed = {
+        ROBOT_TASK_NUMBER: 0,
+        S04_ROBOT_POSITION: 0,
+        S06_PROCESS: 0,
+        S06_PARAMS_WRITTEN: False,
+        S07_PROCESS: 0,
+        S07_PARAMS_WRITTEN: False,
+        S08_PROCESS: 0,
+        S08_PARAMS_WRITTEN: False,
+        S08_CAP_STORAGE_SLOT: 0,
+        S09_PROCESS: 0,
+        S09_PARAMS_WRITTEN: False,
+    }
+    for position in range(1, 7):
+        seed[s04_process(position)] = 0
+        seed[s04_params_written(position)] = False
+        seed[s04_duration(position)] = 0
+    blueprint = WorkflowHandshakeSimulator(
+        _MemoryAdapter(seed),
+        workflow="szlab_magnetic_stirring_workflow",
+        package_mode=True,
+        process_delay=0.0,
+    )
+    values = {**blueprint.initialization_values(), **seed}
+    server, nodes, endpoint = _start_server(values)
+    adapter = OpcUaVariableAdapter(endpoint, "ns=4;s=上位机通讯|")
+    simulator = WorkflowHandshakeSimulator(
+        adapter,
+        workflow="szlab_magnetic_stirring_workflow",
+        package_mode=True,
+        process_delay=0.0,
+    )
+    try:
+        adapter.connect()
+        simulator.initialize()
+        nodes[s04_process(2)].set_value(ua.Variant(3, ua.VariantType.Int32))
+        nodes[s04_params_written(2)].set_value(
+            ua.Variant(True, ua.VariantType.Boolean)
+        )
+        nodes[S06_PROCESS].set_value(ua.Variant(1, ua.VariantType.Int32))
+        nodes[S06_PARAMS_WRITTEN].set_value(
+            ua.Variant(True, ua.VariantType.Boolean)
+        )
+
+        events = simulator.step(now=10.0) + simulator.step(now=10.0)
+
+        assert [(event.phase, event.detail.get("position")) for event in events] == [
+            ("accepted", 2),
+            ("accepted", None),
+            ("completed", 2),
+            ("completed", None),
+        ]
+        assert nodes[s04_done(2)].get_value() is True
+        assert nodes["S06加工完成"].get_value() is True
+        assert simulator.enabled_components
+        assert simulator.protocol_snapshot()["mode"] == "package"
     finally:
         adapter.disconnect()
         server.stop()

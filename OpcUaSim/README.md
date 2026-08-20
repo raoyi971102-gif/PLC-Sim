@@ -73,7 +73,7 @@ opcua-sim
 opcua-sim gui --host 127.0.0.1 --port 18765
 opcua-sim server --host 127.0.0.1 --port 4855
 opcua-sim handshake --url opc.tcp://127.0.0.1:4855/xuse_sim/
-opcua-sim szlab-handshake --workflow szlab_s09_pipetting_workflow
+opcua-sim szlab-handshake --time-scale 10
 opcua-sim server --profile ptlc
 opcua-sim ptlc-handshake --config config/ptlc_handshake.yaml
 ```
@@ -145,7 +145,7 @@ start_all.bat
 .venv\Scripts\python.exe -m pytest tests\test_szlab_handshake_agent.py -q
 ```
 
-协议覆盖 Robot / S04–S09 及单样品原子流等 SZLab 握手场景。
+协议覆盖 Robot / S04–S09 与 S1 HTTP；默认一次启动整个 SZLab 设备包会话。
 
 ### 手动安装
 
@@ -316,93 +316,69 @@ python tools/snapshot_ptlc_profile.py \
   确认不构成部署授权；必须先接入 pTLC `PlcProgramService` 的维护门、目标绑定、
   一次性授权和 `PLC_Deploy_*` 握手，才能重新开放真实 PLC 下载。
 
-## SZLab Poly Studio 握手仿真
+## SZLab 设备包级仿真
 
-`szlab_handshake_agent.py` 以官方 Uni-Lab-SZLab 当前驱动和
-`scripts/szlab_workflow_handshake.py` 为协议基线，覆盖全部 18 个 Python
-工作流和 37 个唯一动作。状态机通过最小变量读写 interface 运行，OPC UA
-只是其中一个 adapter，因此协议测试不需要启动网络服务。
+`szlab_handshake_agent.py` 默认运行 **package mode**：一个进程常驻 Robot、S04
+六个磁搅位、S05、S06、S07、S08、S09 全部 OPC UA 协议，同时启动 S1 HTTP
+stand-in。工作流不再决定启用哪些处理器；Uni-Lab Edge 继续作为 Workflow 的权威
+执行器，任何由已建模 Action 组成的 Workflow 都可以连接同一个仿真会话执行。
 
-覆盖范围包括 Robot 标准任务 `1/3-25`、S02-S11 物料在位传感器、S04
-磁搅、S05 拍照、S06 加液、S07 扫码/转位/注粉、S08 开关盖、S09 移液，
-以及标准物料转运、单样品物料感知全流程、无 S07 扫码原子流程和使用 S0722
-交接位的烧杯五工位搬运。
-S07/S09 天平读数、S08 瓶盖暂存位、
-S09 TIP 盒/试剂瓶工位和液体余量都会随协议初始化或动作完成更新。
-真机没有可靠的 `S09天平读数稳定`，握手代理不会读写该点。
-S09 完成只以 `S09工艺完成` 为准；工艺 9 按 `S09测密度次数` 写入抽/放液天平数组前 N 项。
+当前行为快照与 SZLab Catalog 对齐：19 个 Workflow、9 个真实设备、105 个真实
+Action。其中 62 个物理 Action 由协议模型覆盖，10 个组合/管理 Action 委托既有
+驱动逻辑，17 个查询 Action 直接读取仿真状态，16 个 S1 Action 由 HTTP Adapter
+承接。未知动作按 `unsupported` 关闭失败，不会伪造完成信号。覆盖分类见
+`config/szlab_behavior.yaml`。
 
 先启动包含 SZLab 节点的 OPC UA Server，再运行：
 
-```bat
-start_szlab_handshake.bat
-```
-
-也可以指定其他 endpoint：
-
-```bat
-start_szlab_handshake.bat opc.tcp://127.0.0.1:4855/xuse_sim/
-```
-
-GUI 的“握手代理”默认即 SZLab Poly Studio，并选用内置
-`data/szlab_plc_0810.csv`。可从 Uni-Lab-SZLab 当前 18 个工作流中
-选择一个定向调试。代理只解析、初始化和轮询该工作流实际使用的节点；选择
-“全部官方工作流”时同时启用所有协议模块。
-
-命令行也支持同样的选择和参数覆盖：
-
 ```bash
 python szlab_handshake_agent.py \
-  --workflow s04_robot_stirring_workflow \
-  --position 2 \
-  --pump 1 \
-  --delay-ms 250 \
-  --poll-ms 40 \
-  --s09-remaining-volume-ml 100
+  --url opc.tcp://127.0.0.1:4855/xuse_sim/ \
+  --time-scale 1 \
+  --s1-host 127.0.0.1 \
+  --s1-port 8055
 ```
+
+Windows/macOS 仍可使用 `start_szlab_handshake.bat` 或
+`start_szlab_handshake.command`。S1 驱动应配置到
+`http://127.0.0.1:8055/api/v1`；需要执行调度、停止、清洗或补液动作时，
+该驱动实例还需明确配置 `test_mode=false` 与 `allow_hardware_action=true`；
+这些请求仍只会进入本地 stand-in，不会操作真实硬件。远程部署时把监听
+地址改为可达地址并单独暴露端口。
 
 | 参数 | 用途 |
 |---|---|
-| `--workflow` | `all` 或 18 个官方工作流 ID 之一；旧 S07/S09 ID 仍作为别名 |
-| `--position` | S04 调试位置，范围 `1-6` |
-| `--pump` | S06 储液瓶，`1`、`2` 或 `3`（双泵） |
-| `--delay-ms` | 统一覆盖无设备时间参数的动作延时；S04 磁搅优先使用本次动作的磁搅时间 |
-| `--poll-ms` | OPC UA 轮询间隔，最小 5 ms |
-| `--s09-remaining-volume-ml` | S09 1-5 号液体瓶的初始余量 |
-| `--s07-balance-reading` | S07 注粉完成时写入的模拟天平值 |
-| `--s09-balance-reading` | S09 放液/测密度完成时写入的模拟天平值 |
+| `--workflow` | `list/check` 时过滤 Workflow；`serve` 时仅选择兼容初始场景，所有协议仍常驻 |
+| `--legacy-workflow-mode` | 临时恢复旧版按 Workflow 裁剪处理器的行为 |
+| `--position` | 兼容场景的默认 S04 位置；package mode 仍同时监听 `1-6` |
+| `--pump` | 初始在位的 S06 储液瓶，`1`、`2` 或 `3`（双泵） |
+| `--time-scale` | Robot、S04-S09 参数时长和回退延时的统一倍率 |
+| `--delay-ms` | 无设备时间参数动作的回退延时 |
+| `--state-file` | 原子写入会话、运行、事件、世界状态和覆盖报告 JSON |
+| `--s1-host` / `--s1-port` | S1 HTTP stand-in 监听地址和端口 |
+| `--no-s1-http` | 明确关闭 S1 Adapter |
 
-仿真驱动优先使用实机格式
-`ns=4;s=上位机通讯|<变量名>`，找不到时按 BrowseName 递归匹配。
-缺少所选工作流需要的节点时会明确报错，不会静默跳过并让 Edge 一直等待。
+通用运行时位于 `package_simulation.py`，SZLab Adapter 位于
+`szlab_package_runtime.py`。它们提供统一 `session_id/run_id`、有序事件、共享世界
+状态、覆盖报告和原子快照。GUI 通过 `GET /api/agent/szlab/state` 读取同一份状态。
 
-`szlab_stack_s05_s06_workflow` 已恢复为官方定义：读取堆栈状态后执行 S05
-拍照和 S06 加液，不再复用旧的 `szlab-parallel-robot-lock-rev-1` 私有 revision。
+S04 完成时间优先采用驱动写入的毫秒时长；例如 `duration=30` 在 1× 倍率下等待
+30 秒后反馈，在 10× 下等待 3 秒。S09 仍只以 `S09工艺完成` 为完成依据，工艺 9
+按测密度次数写抽/放液天平数组。内置 `data/szlab_plc_0810.csv` 必须与 Edge 使用的
+驱动节点合同一致。
 
-延时、工作流和 PLC 侧初始值位于 `config/szlab_handshake.yaml`。命令行或 GUI
-显式参数优先于该配置：
+`config/szlab_handshake.yaml` 保存 OPC 协议与进程参数，
+`config/szlab_package.yaml` 保存世界初态，`config/szlab_behavior.yaml` 保存 Catalog
+覆盖快照。更新 Uni-Lab-SZLab 后可在其 Python 3.11 环境中运行：
 
-- `workflow`：`all` 或指定工作流 ID；
-- `position`：S04 定向调试位置；
-- `pump`：初始化为在位的 S06 储液瓶，取值 `1`、`2` 或 `3`（两瓶）；
-- `s06_robot_workflow`：兼容开关；选择 S06 机器人或物料工作流时会自动启用；
-- `s09_pipetting_workflow`：兼容开关；选择 S09 或单样品工作流时会自动启用；
-- `s09_remaining_volume_ml`：S09 1-5 号液体瓶的初始余量；
-- `s07_balance_reading` / `s09_balance_reading`：动作完成时反馈的模拟天平值；
-- `cleanup_on_exit`：正常停止时清理仿真器拥有的 PLC 输出，但保留 PC 写入的任务号、
-  工艺号和参数标志。
+```bash
+python tools/snapshot_szlab_profile.py /path/to/Uni-Lab-SZLab \
+  --behavior config/szlab_behavior.yaml
+```
 
-S04 磁搅接单后会读取 `磁搅时间设置_上位机[position-1]`，该值单位为
-毫秒。例如单点动作的 `duration=30` 会写入 `30000`，代理在 30 秒后才反馈
-S04 加工完成。如果 Server 不提供该节点，代理使用 `delays.stirrer` 的固定延时。
-其他协议模块分别使用 `delays.robot/pump/s07/s08/s09`。
-
-S09 按新版驱动保持 `S09参数写入完成=True` 直到本工艺完成，代理只有同时看到
-有效工艺号和参数完成信号才接单；Edge 将二者清零后，代理才复位完成码并允许下一轮。
-
-内置 `data/szlab_plc_0810.csv` 与官方部署图一致，并由测试校验包含全部握手变量。
-启动仿真 Server 时应加载这份表，或加载从更新 PLC 工程提取且包含同等节点的 CSV。
-S09 点表已去掉 `S09天平读数稳定`，并包含测密度次数与抽/放液天平数组。
+命令返回非零表示设备、Action 或 Workflow 数量已经漂移，发布前必须补齐模型或明确
+分类。`SZLAB_REFERENCE_ROOT=/path/to/Uni-Lab-SZLab python -m pytest` 会启用同一项
+跨仓库合同检查。
 
 ## Web GUI
 
@@ -540,7 +516,7 @@ python -m ino_mcp.cli extract `
 
 ```text
 OpcUaSim/
-├── config/                       # SZLab 握手配置
+├── config/                       # SZLab/PTLC 协议、世界初态与行为覆盖快照
 ├── data/                         # 开箱即用的 CSV（含 szlab_plc_0810）
 ├── gui/                          # FastAPI 应用装配、功能路由与前端资源
 │   ├── backend.py                # 应用、诊断、SSE 与 CLI 入口
@@ -564,8 +540,11 @@ OpcUaSim/
 ├── ptlc_effects.py                # 配置化变量副作用
 ├── ptlc_handshake_agent.py        # PTLC L2 状态机
 ├── ptlc_runtime.py                # OPC 适配器、运行状态与故障模型
+├── package_simulation.py          # 通用设备包会话、时钟、世界状态与事件
 ├── server.py
-├── szlab_handshake_agent.py      # SZLab Robot / S04-S09 握手仿真
+├── szlab_package_runtime.py       # SZLab Catalog 覆盖与协议事件 Adapter
+├── szlab_s1_sim.py                # S1 连续流工作站 HTTP stand-in
+├── szlab_handshake_agent.py       # SZLab 全设备包 OPC UA 仿真入口
 ├── pyproject.toml                 # unilab-opcua-sim wheel 元数据
 ├── requirements.txt
 ├── setup_venv.bat

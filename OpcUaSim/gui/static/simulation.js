@@ -124,11 +124,14 @@ function syncSzlabAgentOptions() {
     for (const id of [
       "agentPositionField", "agentPumpField", "agentS09VolumeField",
       "agentS07BalanceField", "agentS09BalanceField",
+      "agentS1HostField", "agentS1PortField",
     ]) $(id).classList.add("hidden");
     $("agentDelayField").classList.remove("hidden");
     return;
   }
   const workflow = $("agentWorkflow").value;
+  $("agentS1HostField").classList.remove("hidden");
+  $("agentS1PortField").classList.remove("hidden");
   $("agentPositionField").classList.toggle(
     "hidden", !SZLAB_S04_WORKFLOWS.has(workflow)
   );
@@ -156,6 +159,7 @@ function setAgentFormDisabled(disabled) {
     "agentWorkflow", "agentPosition", "agentPump", "agentDelayMs",
     "agentPollMs", "agentS09Volume", "agentS07Balance", "agentS09Balance",
     "agentTimeScale", "ptlcFaultStation", "ptlcFaultCode", "ptlcFaultOutcome",
+    "agentS1Host", "agentS1Port",
   ]) {
     $(id).disabled = disabled;
   }
@@ -179,6 +183,8 @@ $("btnAgentStart").onclick = async () => {
     const profile = $("agentProfile").value;
     if (profile === "ptlc") {
       await requireBackendCapability("ptlc_handshake_agent", "PTLC L2 代理");
+    } else {
+      await requireBackendCapability("szlab_package_runtime", "SZLab 设备包仿真");
     }
     const body = {
       profile,
@@ -186,14 +192,16 @@ $("btnAgentStart").onclick = async () => {
       port: parseInt($("agentPort").value, 10) || 4855,
       config: $("agentCfg").value.trim() || null,
       poll_ms: readAgentNumber("agentPollMs", "轮询间隔", 5, 60000, true),
+      time_scale: readAgentNumber("agentTimeScale", "仿真时间倍率", 0.01, 1000),
     };
     if (profile === "ptlc") {
       body.delay_ms = $("agentDelayMs").value.trim()
         ? readAgentNumber("agentDelayMs", "动作延时", 0, 3600000, true)
         : undefined;
-      body.time_scale = readAgentNumber("agentTimeScale", "仿真时间倍率", 0.01, 1000);
     } else {
       body.workflow = workflow;
+      body.s1_host = $("agentS1Host").value.trim() || "127.0.0.1";
+      body.s1_port = readAgentNumber("agentS1Port", "S1 HTTP 端口", 1, 65535, true);
     }
     if (profile === "szlab" &&
       workflow !== "szlab_photoshotting_workflow" &&

@@ -326,7 +326,7 @@
             <label class="field full">
               <span>代理类型</span>
               <select id="agentProfile">
-                <option value="szlab">SZLab 工作流握手</option>
+                <option value="szlab">SZLab 设备包仿真</option>
                 <option value="ptlc">PTLC V2 通用 L2 握手</option>
               </select>
             </label>
@@ -344,14 +344,14 @@
             </label>
             <details id="szlabAgentOptions" class="agent-options full" open>
               <summary>
-                <span>握手调试参数</span>
-                <small>SZLab 可选择工作流；PTLC 使用通用 L2 工位代理</small>
+                <span>仿真会话参数</span>
+                <small>SZLab 一次启动全部设备协议；工作流仅选择兼容初始场景</small>
               </summary>
               <div class="form-grid agent-options-grid">
                 <label class="field full" id="agentWorkflowField">
-                  <span>调试工作流</span>
+                  <span>初始场景 <em>可选，运行期间全部协议始终可用</em></span>
                   <select id="agentWorkflow">
-                    <option value="all">全部官方工作流</option>
+                    <option value="all">设备包就绪场景</option>
                     <option value="szlab_magnetic_stirring_workflow">S04 磁力搅拌</option>
                     <option value="szlab_photoshotting_workflow">S05 拍照</option>
                     <option value="szlab_robot_action_workflow">S04 机器人取放料</option>
@@ -394,6 +394,18 @@
                   <span>轮询间隔 <em>ms</em></span>
                   <input id="agentPollMs" type="number" value="20" min="5" max="60000" step="5">
                 </label>
+                <label class="field" id="agentTimeScaleField">
+                  <span>仿真时间倍率</span>
+                  <input id="agentTimeScale" type="number" value="1" min="0.01" max="1000" step="0.1">
+                </label>
+                <label class="field" id="agentS1HostField">
+                  <span>S1 HTTP 监听地址</span>
+                  <input id="agentS1Host" value="127.0.0.1">
+                </label>
+                <label class="field" id="agentS1PortField">
+                  <span>S1 HTTP 端口</span>
+                  <input id="agentS1Port" type="number" value="8055" min="1" max="65535" step="1">
+                </label>
                 <label class="field full" id="agentS09VolumeField">
                   <span>S09 液体瓶初始余量 <em>mL</em></span>
                   <input id="agentS09Volume" type="number" value="100" min="0.1" step="0.1">
@@ -411,10 +423,6 @@
             <div id="ptlcAgentHint" class="field full hidden">
               <span>PTLC 模式响应 8 个 L2 工位，并启用动作契约、连续运动、部署 FSM 和工艺副作用。</span>
               <div class="form-grid">
-                <label class="field">
-                  <span>仿真时间倍率</span>
-                  <input id="agentTimeScale" type="number" value="1" min="0.01" max="1000" step="0.1">
-                </label>
                 <label class="field">
                   <span>故障工位</span>
                   <select id="ptlcFaultStation">
@@ -437,6 +445,9 @@
                 </label>
               </div>
               <button id="btnPtlcFault" class="btn small" type="button">应用运行期故障</button>
+            </div>
+            <div id="agentRuntimeSummary" class="inline-result full">
+              尚未启动仿真会话
             </div>
           </div>
           <div class="card-actions">

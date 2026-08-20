@@ -85,6 +85,7 @@ def test_official_stack_workflow_exposes_only_pump_options() -> None:
 def test_szlab_agent_options_are_forwarded_to_cli() -> None:
     req = AgentStartReq(
         profile="szlab",
+        package_config="config/custom-szlab-package.yaml",
         workflow="s04_robot_stirring_workflow",
         position=5,
         pump=3,
@@ -93,12 +94,18 @@ def test_szlab_agent_options_are_forwarded_to_cli() -> None:
         s09_remaining_volume_ml=88.5,
         s07_balance_reading=1.25,
         s09_balance_reading=2.5,
+        time_scale=4,
+        s1_host="0.0.0.0",
+        s1_port=18055,
     )
     cmd = ["python", "szlab_handshake_agent.py"]
 
     options = _extend_szlab_command(cmd, req)
 
     assert options == {
+        "package_config": "config/custom-szlab-package.yaml",
+        "s1_host": "0.0.0.0",
+        "s1_port": 18055,
         "workflow": "s04_robot_stirring_workflow",
         "position": 5,
         "pump": 3,
@@ -107,10 +114,17 @@ def test_szlab_agent_options_are_forwarded_to_cli() -> None:
         "s09_remaining_volume_ml": 88.5,
         "s07_balance_reading": 1.25,
         "s09_balance_reading": 2.5,
+        "time_scale": 4.0,
     }
     assert cmd == [
         "python",
         "szlab_handshake_agent.py",
+        "--package-config",
+        "config/custom-szlab-package.yaml",
+        "--s1-host",
+        "0.0.0.0",
+        "--s1-port",
+        "18055",
         "--workflow",
         "s04_robot_stirring_workflow",
         "--position",
@@ -127,7 +141,38 @@ def test_szlab_agent_options_are_forwarded_to_cli() -> None:
         "1.25",
         "--s09-balance-reading",
         "2.5",
+        "--time-scale",
+        "4.0",
     ]
+
+
+def test_szlab_agent_state_api_reports_package_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class RunningProcess:
+        def poll(self) -> None:
+            return None
+
+    state_file = tmp_path / "szlab-package-state.json"
+    backend.write_json_file(
+        state_file,
+        {"schema": "unilab.package_simulation/v1", "session_id": "session-1"},
+    )
+    monkeypatch.setattr(backend._STATE, "agent_proc", RunningProcess())
+    monkeypatch.setattr(backend._STATE, "agent_profile", "szlab")
+    monkeypatch.setattr(backend._STATE, "agent_state_file", str(state_file))
+
+    payload = asyncio.run(backend.api_szlab_agent_state())
+
+    assert payload == {
+        "ok": True,
+        "running": True,
+        "state": {
+            "schema": "unilab.package_simulation/v1",
+            "session_id": "session-1",
+        },
+    }
 
 
 def test_ptlc_agent_only_forwards_generic_timing_options() -> None:
@@ -169,6 +214,7 @@ def test_ptlc_profiles_are_selectable_in_gui() -> None:
     assert "element_value" in app_js
     capabilities = asyncio.run(api_version())["capabilities"]
     assert capabilities == {
+        "szlab_package_runtime": True,
         "ptlc_server_profile": True,
         "ptlc_handshake_agent": True,
         "ptlc_write_ownership": True,
