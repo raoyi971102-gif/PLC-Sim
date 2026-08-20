@@ -159,6 +159,7 @@ function setAgentFormDisabled(disabled) {
     "agentWorkflow", "agentPosition", "agentPump", "agentDelayMs",
     "agentPollMs", "agentS09Volume", "agentS07Balance", "agentS09Balance",
     "agentTimeScale", "ptlcFaultStation", "ptlcFaultCode", "ptlcFaultOutcome",
+    "ptlcSensorMode",
     "agentS1Host", "agentS1Port",
   ]) {
     $(id).disabled = disabled;
@@ -198,6 +199,7 @@ $("btnAgentStart").onclick = async () => {
       body.delay_ms = $("agentDelayMs").value.trim()
         ? readAgentNumber("agentDelayMs", "动作延时", 0, 3600000, true)
         : undefined;
+      body.sensor_mode = $("ptlcSensorMode").value;
     } else {
       body.workflow = workflow;
       body.s1_host = $("agentS1Host").value.trim() || "127.0.0.1";
@@ -257,5 +259,59 @@ $("btnPtlcFault").onclick = async () => {
       outcome: $("ptlcFaultOutcome").value,
     });
     alert("运行期故障已更新:\n" + JSON.stringify(result.faults, null, 2));
+  } catch (e) { alert(e.message); }
+};
+
+const PTLC_SENSOR_SITES = [
+  "collect_bottle", "staging_a", "staging_b",
+  "sampling_tray_1", "sampling_tray_2",
+  ...Array.from({ length: 12 }, (_, index) =>
+    `rack_${String(index + 1).padStart(2, "0")}`),
+];
+
+function fillPtlcSiteSelect(id, includeExternal) {
+  const values = includeExternal ? ["external", ...PTLC_SENSOR_SITES] : PTLC_SENSOR_SITES;
+  $(id).replaceChildren(...values.map((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    return option;
+  }));
+}
+
+function syncPtlcEventFields() {
+  const siteSet = $("ptlcEventKind").value === "site_set";
+  $("ptlcEventSourceField").classList.toggle("hidden", siteSet);
+  $("ptlcEventTargetField").classList.toggle("hidden", siteSet);
+  $("ptlcEventSiteField").classList.toggle("hidden", !siteSet);
+  $("ptlcEventPresentField").classList.toggle("hidden", !siteSet);
+}
+
+fillPtlcSiteSelect("ptlcEventSource", true);
+fillPtlcSiteSelect("ptlcEventTarget", true);
+fillPtlcSiteSelect("ptlcEventSite", false);
+$("ptlcEventTarget").value = "collect_bottle";
+$("ptlcEventKind").onchange = syncPtlcEventFields;
+syncPtlcEventFields();
+
+$("btnPtlcWorldEvent").onclick = async () => {
+  try {
+    const kind = $("ptlcEventKind").value;
+    const event = {
+      event_id: `gui-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      kind,
+    };
+    if (kind === "site_set") {
+      event.site = $("ptlcEventSite").value;
+      event.present = $("ptlcEventPresent").value === "true";
+    } else {
+      event.source = $("ptlcEventSource").value;
+      event.target = $("ptlcEventTarget").value;
+      if (event.source === event.target) {
+        throw new Error("来源站点和目标站点不能相同");
+      }
+    }
+    const result = await post("/api/agent/ptlc/world", { events: [event] });
+    alert("传感器事件已提交:\n" + JSON.stringify(result.world.events.at(-1), null, 2));
   } catch (e) { alert(e.message); }
 };

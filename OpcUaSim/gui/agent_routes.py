@@ -9,14 +9,26 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 try:
     from ..cli import runtime_command
     from ..common import runtime_data_dir
+    from ..ptlc_sensors import (
+        PTLC_EVENT_KINDS,
+        PTLC_SENSOR_KEYS,
+        PTLC_SENSOR_SITES,
+        PTLC_TRANSFER_SITES,
+    )
 except ImportError:  # Source checkout: ``import gui.backend``.
     from cli import runtime_command
     from common import runtime_data_dir
+    from ptlc_sensors import (
+        PTLC_EVENT_KINDS,
+        PTLC_SENSOR_KEYS,
+        PTLC_SENSOR_SITES,
+        PTLC_TRANSFER_SITES,
+    )
 
 from .backend_state import STATE, read_json_file, write_json_file
 from .processes import (
@@ -70,6 +82,7 @@ class AgentStartReq(BaseModel):
     delay_ms: int | None = Field(default=None, ge=0, le=3_600_000)
     poll_ms: int | None = Field(default=None, ge=5, le=60_000)
     time_scale: float | None = Field(default=None, gt=0, le=1000)
+    sensor_mode: str | None = None
     s1_host: str | None = None
     s1_port: int | None = Field(default=None, ge=1, le=65535)
     s09_remaining_volume_ml: float | None = Field(default=None, gt=0)
@@ -126,6 +139,11 @@ def _extend_ptlc_command(cmd: list[str], req: AgentStartReq) -> dict[str, Any]:
     if req.time_scale is not None:
         options["time_scale"] = req.time_scale
         cmd.extend(["--time-scale", str(req.time_scale)])
+    if req.sensor_mode is not None:
+        if req.sensor_mode not in {"standalone", "federated"}:
+            raise HTTPException(400, "PTLC 传感器模式仅支持 standalone/federated")
+        options["sensor_mode"] = req.sensor_mode
+        cmd.extend(["--sensor-mode", req.sensor_mode])
     return options
 
 
@@ -168,15 +186,32 @@ async def api_agent_start(req: AgentStartReq) -> dict[str, Any]:
         runtime_root = runtime_data_dir() / "runtime"
         fault_file = runtime_root / "ptlc-faults.json"
         state_file = runtime_root / "ptlc-state.json"
+        world_file = runtime_root / "ptlc-world.json"
         if not fault_file.exists():
             write_json_file(fault_file, {})
-        cmd.extend(["--fault-file", str(fault_file), "--state-file", str(state_file)])
+        if not world_file.exists():
+            write_json_file(
+                world_file,
+                {"feed_count": 12, "waste_count": 0, "sensors": {}, "events": []},
+            )
+        cmd.extend(
+            [
+                "--fault-file",
+                str(fault_file),
+                "--world-file",
+                str(world_file),
+                "--state-file",
+                str(state_file),
+            ]
+        )
         STATE.ptlc_fault_file = str(fault_file)
         STATE.ptlc_state_file = str(state_file)
+        STATE.ptlc_world_file = str(world_file)
         STATE.agent_state_file = str(state_file)
     else:
         STATE.ptlc_fault_file = None
         STATE.ptlc_state_file = None
+        STATE.ptlc_world_file = None
         runtime_root = runtime_data_dir() / "runtime"
         state_file = runtime_root / "szlab-package-state.json"
         write_json_file(state_file, {})
@@ -243,6 +278,35 @@ class PtlcFaultReq(BaseModel):
     outcome: str = "done"
 
 
+class PtlcWorldEventReq(BaseModel):
+    """机器人等外部模拟器可提交的幂等物料感知事件。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str = Field(min_length=1, max_length=128)
+    kind: str
+    site: str | None = None
+    present: bool | None = None
+    source: str | None = None
+    target: str | None = None
+
+
+class PtlcWorldReq(BaseModel):
+    """外部设备模拟器可回灌的 PLC 输入事实。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    feed_count: int | None = Field(default=None, ge=0, le=1000)
+    waste_count: int | None = Field(default=None, ge=0, le=1000)
+    feed_homed: bool | None = None
+    waste_homed: bool | None = None
+    sensors: dict[str, Any] = Field(default_factory=dict)
+    events: list[PtlcWorldEventReq] = Field(default_factory=list, max_length=100)
+
+
+PTLC_WORLD_SENSOR_KEYS = PTLC_SENSOR_KEYS
+
+
 @router.get("/api/agent/ptlc/state")
 async def api_ptlc_agent_state() -> dict[str, Any]:
     return {
@@ -250,7 +314,53 @@ async def api_ptlc_agent_state() -> dict[str, Any]:
         "running": bool(STATE.agent_proc and STATE.agent_proc.poll() is None),
         "state": read_json_file(STATE.ptlc_state_file),
         "faults": read_json_file(STATE.ptlc_fault_file) or {},
+        "world": read_json_file(STATE.ptlc_world_file) or {},
     }
+
+
+@router.post("/api/agent/ptlc/world")
+async def api_ptlc_agent_world(req: PtlcWorldReq) -> dict[str, Any]:
+    """原子更新 PLC 输入世界文件，供独立机器人/视觉模拟器协作。"""
+
+    unknown_sensors = sorted(set(req.sensors) - PTLC_WORLD_SENSOR_KEYS)
+    if unknown_sensors:
+        raise HTTPException(400, f"未知 PLC 输入传感器: {', '.join(unknown_sensors)}")
+    event_ids: set[str] = set()
+    for event in req.events:
+        if event.event_id in event_ids:
+            raise HTTPException(400, f"重复 event_id: {event.event_id}")
+        event_ids.add(event.event_id)
+        if event.kind not in PTLC_EVENT_KINDS:
+            raise HTTPException(400, f"未知 PTLC 世界事件: {event.kind}")
+        if event.kind == "site_set" and (
+            event.site not in PTLC_SENSOR_SITES or event.present is None
+        ):
+            raise HTTPException(400, "site_set 需要合法 site 和 present")
+        if event.kind == "material_transfer" and (
+            event.source not in PTLC_TRANSFER_SITES
+            or event.target not in PTLC_TRANSFER_SITES
+            or event.source == event.target
+        ):
+            raise HTTPException(400, "material_transfer 需要不同的合法 source/target")
+    path = (
+        Path(STATE.ptlc_world_file)
+        if STATE.ptlc_world_file
+        else (runtime_data_dir() / "runtime" / "ptlc-world.json")
+    )
+    payload = read_json_file(str(path)) or {}
+    for name in ("feed_count", "waste_count", "feed_homed", "waste_homed"):
+        value = getattr(req, name)
+        if value is not None:
+            payload[name] = value
+    sensors = payload.setdefault("sensors", {})
+    sensors.update(req.sensors)
+    if req.events:
+        events = payload.setdefault("events", [])
+        events.extend(event.model_dump(exclude_none=True) for event in req.events)
+        payload["events"] = events[-200:]
+    await asyncio.to_thread(write_json_file, path, payload)
+    STATE.ptlc_world_file = str(path)
+    return {"ok": True, "world": payload}
 
 
 @router.post("/api/agent/ptlc/fault")

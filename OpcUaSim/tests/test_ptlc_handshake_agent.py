@@ -694,11 +694,11 @@ def test_sampling_init_moves_5z_before_4x_and_never_moves_3y() -> None:
     assert [event.phase for event in simulator.step(now=0.68)] == ["completed"]
 
 
-def test_unmodeled_complex_action_stays_running_instead_of_false_done() -> None:
-    """验证未完成真实语义建模的复杂动作按失败关闭处理。
+def test_sampling_action_50_rejects_invalid_p_instruction_without_hanging() -> None:
+    """验证吸液动作已建模，并对无效泵指令返回确定性错误。
 
     参数：无；提交需要泵协议、行程校验和安全抬针的 Sampling A50。
-    返回：无；断言动作不会在统一延时后伪造 DONE，并可从快照识别缺口。
+    返回：无；断言动作不会永久 RUNNING，而是按 PLC 契约返回 463。
     """
 
     values = _station_values("Sampling")
@@ -713,9 +713,10 @@ def test_unmodeled_complex_action_stays_running_instead_of_false_done() -> None:
     })
 
     assert [event.phase for event in simulator.step(now=0.0)] == ["accepted"]
-    assert simulator.step(now=60.0) == []
-    assert values["Sampling_L2_State"] == 10
-    assert simulator.snapshot()["active_cycles"]["Sampling"]["outcome"] == "unmodeled"
+    assert [event.phase for event in simulator.step(now=60.0)] == ["error"]
+    assert values["Sampling_L2_State"] == 40
+    assert values["Sampling_L2_ErrorCode"] == 463
+    assert simulator.snapshot()["plant"]["coverage"]["unmodeled"]["Sampling"] == []
 
 
 def test_tank_drain_runs_phases_and_updates_native_array() -> None:

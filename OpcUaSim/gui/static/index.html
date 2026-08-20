@@ -423,6 +423,13 @@
             <div id="ptlcAgentHint" class="field full hidden">
               <span>PTLC 模式响应 8 个 L2 工位，并启用动作契约、连续运动、部署 FSM 和工艺副作用。</span>
               <div class="form-grid">
+                <label class="field full">
+                  <span>传感器模式</span>
+                  <select id="ptlcSensorMode">
+                    <option value="standalone">独立调试（自动模拟外部取放）</option>
+                    <option value="federated">联合仿真（仅接受外部物料事件）</option>
+                  </select>
+                </label>
                 <label class="field">
                   <span>故障工位</span>
                   <select id="ptlcFaultStation">
@@ -445,6 +452,35 @@
                 </label>
               </div>
               <button id="btnPtlcFault" class="btn small" type="button">应用运行期故障</button>
+              <div class="form-grid">
+                <label class="field">
+                  <span>物料事件</span>
+                  <select id="ptlcEventKind">
+                    <option value="material_transfer">物料转移</option>
+                    <option value="site_set">站点存在状态</option>
+                  </select>
+                </label>
+                <label class="field" id="ptlcEventSourceField">
+                  <span>来源站点</span>
+                  <select id="ptlcEventSource"></select>
+                </label>
+                <label class="field" id="ptlcEventTargetField">
+                  <span>目标站点</span>
+                  <select id="ptlcEventTarget"></select>
+                </label>
+                <label class="field hidden" id="ptlcEventSiteField">
+                  <span>输入站点</span>
+                  <select id="ptlcEventSite"></select>
+                </label>
+                <label class="field hidden" id="ptlcEventPresentField">
+                  <span>物料存在</span>
+                  <select id="ptlcEventPresent">
+                    <option value="true">存在</option>
+                    <option value="false">不存在</option>
+                  </select>
+                </label>
+              </div>
+              <button id="btnPtlcWorldEvent" class="btn small" type="button">提交传感器事件</button>
             </div>
             <div id="agentRuntimeSummary" class="inline-result full">
               尚未启动仿真会话

@@ -24,11 +24,11 @@ OUTPUT_DEFAULTS: dict[str, Any] = {
 }
 TERMINAL_STATES = {20, 30, 40, 50}
 MODELED_ACTIONS: dict[str, frozenset[int]] = {
-    "Sampling": frozenset({10, 32, 33}),
-    "Collect": frozenset({21, 22, 23, 24, 30, 41, 42, 43}),
-    "Develop": frozenset({50, 51}),
-    "PhotoScrape": frozenset({32, 36, 41, 52}),
-    "FeedLift": frozenset(),
+    "Sampling": frozenset({10, 20, 31, 32, 33, 40, 50, 55, 60, 61, 62}),
+    "Collect": frozenset({10, 21, 22, 23, 24, 30, 41, 42, 43}),
+    "Develop": frozenset({10, 20, 21, 22, 26, 31, 32, 50, 51}),
+    "PhotoScrape": frozenset({10, 31, 32, 33, 34, 35, 36, 40, 41, 42, 43, 44, 51, 52}),
+    "FeedLift": frozenset({10, 11, 12, 13, 21, 22, 91}),
     "Pump": frozenset({10, 20}),
     "Rail": frozenset({10}),
     "StagingA": frozenset({24, 25}),
@@ -211,6 +211,7 @@ class ActionCycle:
     steps: tuple[int, ...] = ()
     last_step_index: int = -1
     motion: tuple[MotionSegment, ...] = ()
+    plant_action: Any = None
 
 
 @dataclass

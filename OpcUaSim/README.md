@@ -251,7 +251,14 @@ python szlab_handshake_agent.py `
 
 ## PTLC V2 L2 握手仿真
 
-PTLC profile 是 PLC-Sim 内置的协议快照，不会在运行时导入或修改 PTLC 仓库：
+正式架构由 **Uni-Lab OS FE + Uni-Lab OS Backend + PLC-SIM** 共同替代 PTLC_UI。
+OS Backend 是工作流、资源锁和跨设备协调的唯一真源；PLC-SIM 是 PLC-only 仿真后端，
+只维护 OPC UA 节点、L2 信封、PLC 时序、轴、气缸、泵、阀、液位和输入映像。
+机器人、相机、视觉及其他直连设备由独立模拟模块负责，OS 连接 PTLC_UI 仿真只作为迁移期兼容路径。
+当前能力边界、剩余差距和建设优先级见
+[PTLC PLC 仿真能力评估](../docs/ptlc-plc-simulation-gap-assessment.md)。
+
+PTLC profile 是 PLC-SIM 内置的协议快照，不会在运行时导入或修改 PTLC 仓库：
 
 ```bash
 opcua-sim server --profile ptlc --csv config/ptlc_nodes.yaml
@@ -264,17 +271,65 @@ Server 会创建
 代理响应 Sampling、Collect、Develop、PhotoScrape、FeedLift、Pump、Rail、StagingA
 八个统一 L2 通道。`config/ptlc_behavior/` 固化各工位合法动作码、步序、错误码、
 门禁、计时常量和原始注记；未知动作按对应派发器错误码 REJECTED，不再默认成功。
-代理还提供完整 `PLC_Deploy_*` PREPARING/SAFE/COMMITTED 状态机、动作级连续轴位置
-推进、地轨数组索引、Develop 50/55/56/98 排液过程、Collect A22/A23 瓶互锁、
-Collect A30 多轮排液/沉淀计时以及确定性事件快照。
+代理提供完整 `PLC_Deploy_*` PREPARING/SAFE/COMMITTED 状态机、动作级连续轴位置、
+FeedLift 板堆/搜索、地轨数组索引、Develop 排液与抽吸、Collect 瓶互锁和多轮排液、
+Sampling 泵行程门、PhotoScrape 对位安全门、延迟气缸到位反馈、PLC 输入字节合成及
+确定性事件快照。执行器命令与传感器反馈使用不同的时钟：命令可立即写出，到位输入按
+`plant.cylinder_s` 延迟变化；IX8..IX12 始终由当前物理事实重新合成。
+八个 dispatcher 的 **55 个合法 PLC 动作全部建模**；合法动作会完成，或按行为规格进入
+确定性 REJECTED/ERROR，不再以 `unmodeled` 无限等待。可用
+`opcua-sim ptlc-handshake list` 查看 55/55 覆盖率。代理重启会锁存现有 Start 电平并
+保留 L2 序号/终态，避免重放保持为高电平的非幂等请求。
 
-当前只有下列动作完成了可验证建模：Sampling `10/32/33`，Collect
-`21/22/23/24/30/41/42/43`，Develop `50/51`，PhotoScrape `32/36/41/52`，
-Pump `10/20`，Rail `10`，StagingA `24/25`。其他已知合法动作会进入 RUNNING 并
-在状态快照中标成 `unmodeled`，等待上位机绝对超时或 Reset；代理不会用统一延时
-伪造 DONE。可用 `opcua-sim ptlc-handshake list` 查看 `modeled_actions` 和
-`unmodeled_actions`。代理重启会锁存现有 Start 电平并保留 L2 序号/终态，避免重放
-保持为高电平的非幂等请求。
+物料传感器支持两种模式，由 `config/ptlc_handshake.yaml` 的
+`plant.sensor_mode` 选择：
+
+- `standalone`：默认的一键 PLC 调试模式。Collect A22/A23 会在
+  `external_transition_s` 后自动模拟外部取走/放入；FeedLift 成功取料/放废料后自动更新计数。
+- `federated`：OS + 多设备联合仿真模式。PLC-SIM 不推断机器人动作，只接受机器人等
+  外部模拟器提供的幂等现场事件。
+
+GUI 启动 PTLC 代理时可直接选择模式，命令行可用
+`--sensor-mode standalone|federated` 覆盖 YAML 默认值。
+
+独立设备模拟器可通过 `--world-file` 向 PLC 输入层回灌现场事实；支持
+`feed_count`、`waste_count`、双轴回零状态、`sensors` 以及带 `event_id` 的 `events`。
+直接传感器值适合设定初态；运行期转运应优先使用事件：
+
+```json
+{
+  "feed_count": 12,
+  "waste_count": 0,
+  "feed_homed": true,
+  "waste_homed": true,
+  "sensors": {
+    "bottle_present": false,
+    "staging_a_present": false,
+    "rack_occupied": [true, true, false]
+  },
+  "events": [
+    {
+      "event_id": "robot-transfer-0001",
+      "kind": "material_transfer",
+      "source": "staging_a",
+      "target": "collect_bottle"
+    },
+    {
+      "event_id": "operator-rack-0002",
+      "kind": "site_set",
+      "site": "rack_03",
+      "present": true
+    }
+  ]
+}
+```
+
+可用站点包括 `collect_bottle`、`staging_a`、`staging_b`、两个取样托盘及
+`rack_01`..`rack_12`；`external` 可作为转运源或目标，表示 PLC 边界之外。
+`event_id` 在进程内去重，重复事件不会再次改变站点。绝对计数用于进程重启后的状态恢复。
+这条输入 seam 只传递 PLC 能看到的现场事实，不接收工作流、机器人位姿或工具命令。
+GUI 托管 PTLC 代理时会创建 `ptlc-world.json`，也可通过
+`POST /api/agent/ptlc/world` 原子更新；仿真服务页也提供物料转移和站点存在状态控件。
 
 GUI 中分别把节点模型和代理类型切换为 PTLC 即可。PLC 输出默认禁止从在线变量栏
 写入，避免 GUI 与握手代理形成双写者；只有显式勾选“维护写入”才可临时覆盖。
@@ -284,6 +339,7 @@ PTLC 代理支持时间倍率，并可在 GUI 运行期按工位/动作码注入
 ```bash
 opcua-sim ptlc-handshake --time-scale 10 \
   --fault-file data/runtime/ptlc-faults.json \
+  --world-file data/runtime/ptlc-world.json \
   --state-file data/runtime/ptlc-state.json
 ```
 
@@ -524,7 +580,7 @@ OpcUaSim/
 │   ├── processes.py              # 托管子进程生命周期
 │   ├── project_routes.py         # 工程/MCP 路由
 │   ├── server_routes.py          # OPC UA Server/变量路由
-│   ├── agent_routes.py           # 握手代理/PTLC 故障路由
+│   ├── agent_routes.py           # 握手代理/PTLC 故障与 PLC 输入世界路由
 │   └── static/                   # 无构建步骤的模块化浏览器端资源
 ├── ino_mcp/                      # 可选 MCP 客户端、配置、业务封装和 CLI
 ├── scripts/                      # 启动器共用的内部脚本
@@ -539,6 +595,8 @@ OpcUaSim/
 ├── ptlc_behavior.py               # 八工位行为契约加载器
 ├── ptlc_effects.py                # 配置化变量副作用
 ├── ptlc_handshake_agent.py        # PTLC L2 状态机
+├── ptlc_plant.py                  # PTLC PLC 设备仿真深模块（55 个动作）
+├── ptlc_sensors.py                # PLC 输入、气缸反馈与外部物料事件
 ├── ptlc_runtime.py                # OPC 适配器、运行状态与故障模型
 ├── package_simulation.py          # 通用设备包会话、时钟、世界状态与事件
 ├── server.py

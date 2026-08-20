@@ -20,7 +20,13 @@ def test_ptlc_snapshot_covers_v2_types_arrays_and_nested_gvl() -> None:
 
     assert len(nodes) >= 250
     assert {node.data_type for node in nodes} == {
-        "BOOLEAN", "BYTE", "INT16", "INT32", "FLOAT", "DOUBLE", "STRING"
+        "BOOLEAN",
+        "BYTE",
+        "INT16",
+        "INT32",
+        "FLOAT",
+        "DOUBLE",
+        "STRING",
     }
     assert by_name["PLC_Axis_CommOperational"].array_len == 11
     assert by_name["Tank_State"].array_len == 8
@@ -30,16 +36,36 @@ def test_ptlc_snapshot_covers_v2_types_arrays_and_nested_gvl() -> None:
     assert by_name["Rail_ActPos"].write_owner == "plc"
     assert by_name["Sampling_clean_count"].write_owner == "maintenance"
     assert by_name["PLC_Ready"].browse_path == (
-        "DeviceSet", "Inovance-ARM-Linux", "Resources",
-        "Application", "GlobalVars", "Host_Computer",
+        "DeviceSet",
+        "Inovance-ARM-Linux",
+        "Resources",
+        "Application",
+        "GlobalVars",
+        "Host_Computer",
     )
     for station in (
-        "Sampling", "Collect", "Develop", "PhotoScrape",
-        "FeedLift", "Pump", "Rail", "StagingA",
+        "Sampling",
+        "Collect",
+        "Develop",
+        "PhotoScrape",
+        "FeedLift",
+        "Pump",
+        "Rail",
+        "StagingA",
     ):
         for field in (
-            "ActionCode", "RequestSeq", "Start", "Reset", "State", "ActiveCode",
-            "AcceptedSeq", "CompletedSeq", "Step", "ErrorCode", "SafeState", "Retryable",
+            "ActionCode",
+            "RequestSeq",
+            "Start",
+            "Reset",
+            "State",
+            "ActiveCode",
+            "AcceptedSeq",
+            "CompletedSeq",
+            "Step",
+            "ErrorCode",
+            "SafeState",
+            "Retryable",
         ):
             assert f"{station}_L2_{field}" in by_name
 
@@ -81,21 +107,34 @@ def test_optional_reference_contract_has_not_drifted() -> None:
     assert normalize(actual) == normalize(expected)
     reference_specs = Path(root) / "eit_ptlc" / "mock" / "behavior" / "specs"
     for snapshot_path in sorted((ROOT / "config" / "ptlc_behavior").glob("*.yaml")):
-        assert snapshot_path.read_bytes() == (reference_specs / snapshot_path.name).read_bytes()
+        assert (
+            snapshot_path.read_bytes()
+            == (reference_specs / snapshot_path.name).read_bytes()
+        )
 
 
-def test_ptlc_list_reports_modeled_and_fail_closed_actions(capsys) -> None:
-    """验证 CLI 明确公布已建模动作与失败关闭缺口。
+def test_ptlc_list_reports_complete_plc_action_coverage(capsys) -> None:
+    """验证 CLI 明确公布 PLC-only 边界和完整动作覆盖率。
 
     参数：``capsys`` 捕获标准输出。
-    返回：无；断言 Rail 完整建模而 Sampling A50 被标为未建模。
+    返回：无；断言 55 个合法 PLC 动作全部建模且不含工作流运行时。
     """
 
-    assert ptlc_main([
-        "list",
-        "--config",
-        str(ROOT / "config" / "ptlc_handshake.yaml"),
-    ]) == 0
+    assert (
+        ptlc_main(
+            [
+                "list",
+                "--config",
+                str(ROOT / "config" / "ptlc_handshake.yaml"),
+            ]
+        )
+        == 0
+    )
     payload = json.loads(capsys.readouterr().out)
+    assert payload["scope"] == "plc-only"
+    assert payload["orchestrator"] == "Uni-Lab OS Backend"
+    assert payload["sensor_mode"] == "standalone"
     assert payload["modeled_actions"]["Rail"] == [10]
-    assert 50 in payload["unmodeled_actions"]["Sampling"]
+    assert all(not actions for actions in payload["unmodeled_actions"].values())
+    assert payload["coverage"]["modeled"] == 55
+    assert payload["coverage"]["accepted"] == 55

@@ -182,6 +182,7 @@ def test_ptlc_agent_only_forwards_generic_timing_options() -> None:
         delay_ms=75,
         poll_ms=10,
         time_scale=5,
+        sensor_mode="federated",
         position=4,
     )
     cmd = ["python", "ptlc_handshake_agent.py"]
@@ -195,8 +196,15 @@ def test_ptlc_agent_only_forwards_generic_timing_options() -> None:
         "10",
         "--time-scale",
         "5.0",
+        "--sensor-mode",
+        "federated",
     ]
-    assert options == {"delay_ms": 75, "poll_ms": 10, "time_scale": 5.0}
+    assert options == {
+        "delay_ms": 75,
+        "poll_ms": 10,
+        "time_scale": 5.0,
+        "sensor_mode": "federated",
+    }
 
 
 def test_ptlc_profiles_are_selectable_in_gui() -> None:
@@ -212,6 +220,10 @@ def test_ptlc_profiles_are_selectable_in_gui() -> None:
     assert "requireBackendCapability" in app_js
     assert "data-element-index" in app_js
     assert "element_value" in app_js
+    assert 'id="ptlcEventKind"' in html
+    assert 'id="ptlcSensorMode"' in html
+    assert 'id="btnPtlcWorldEvent"' in html
+    assert 'post("/api/agent/ptlc/world"' in app_js
     capabilities = asyncio.run(api_version())["capabilities"]
     assert capabilities == {
         "szlab_package_runtime": True,
@@ -272,6 +284,89 @@ def test_szlab_agent_rejects_unknown_workflow() -> None:
 
     assert exc_info.value.status_code == 400
     assert "未知 SZLab 工作流" in str(exc_info.value.detail)
+
+
+def test_ptlc_world_route_only_persists_plc_input_facts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """验证 GUI 为独立设备模拟器提供原子 PLC 输入世界 seam。"""
+
+    monkeypatch.setattr(agent_routes, "runtime_data_dir", lambda: tmp_path)
+    backend._STATE.ptlc_world_file = None
+    result = asyncio.run(
+        agent_routes.api_ptlc_agent_world(
+            agent_routes.PtlcWorldReq(
+                feed_count=7,
+                waste_count=3,
+                sensors={"bottle_present": True},
+            )
+        )
+    )
+    assert result["world"] == {
+        "feed_count": 7,
+        "waste_count": 3,
+        "sensors": {"bottle_present": True},
+    }
+    assert (tmp_path / "runtime" / "ptlc-world.json").is_file()
+
+
+def test_ptlc_world_route_accepts_validated_material_events(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(agent_routes, "runtime_data_dir", lambda: tmp_path)
+    backend._STATE.ptlc_world_file = None
+
+    result = asyncio.run(
+        agent_routes.api_ptlc_agent_world(
+            agent_routes.PtlcWorldReq(
+                events=[
+                    agent_routes.PtlcWorldEventReq(
+                        event_id="robot-1",
+                        kind="material_transfer",
+                        source="staging_a",
+                        target="collect_bottle",
+                    )
+                ]
+            )
+        )
+    )
+
+    assert result["world"]["events"] == [
+        {
+            "event_id": "robot-1",
+            "kind": "material_transfer",
+            "source": "staging_a",
+            "target": "collect_bottle",
+        }
+    ]
+
+
+def test_ptlc_world_route_rejects_robot_commands(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(agent_routes, "runtime_data_dir", lambda: tmp_path)
+    backend._STATE.ptlc_world_file = None
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            agent_routes.api_ptlc_agent_world(
+                agent_routes.PtlcWorldReq(
+                    events=[
+                        agent_routes.PtlcWorldEventReq(
+                            event_id="robot-2",
+                            kind="robot_move",
+                            source="external",
+                            target="staging_a",
+                        )
+                    ]
+                )
+            )
+        )
+
+    assert exc_info.value.status_code == 400
 
 
 @pytest.mark.parametrize(

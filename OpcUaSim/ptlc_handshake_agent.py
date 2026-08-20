@@ -21,6 +21,7 @@ try:
         effects_for,
         fault_codes,
     )
+    from .ptlc_plant import PtlcPlant
     from .ptlc_runtime import (
         INPUT_FIELDS,
         INSTANT_ACTIONS,
@@ -35,7 +36,6 @@ try:
     )
     from .ptlc_runtime import ActionCycle as _Cycle
     from .ptlc_runtime import DeployCycle as _DeployCycle
-    from .ptlc_runtime import MotionSegment as _MotionSegment
 except ImportError:  # Direct `python ptlc_handshake_agent.py` compatibility.
     from ptlc_behavior import StationContract, load_behavior_contracts
     from ptlc_deploy import step_deploy
@@ -47,6 +47,7 @@ except ImportError:  # Direct `python ptlc_handshake_agent.py` compatibility.
         effects_for,
         fault_codes,
     )
+    from ptlc_plant import PtlcPlant
     from ptlc_runtime import (
         INPUT_FIELDS,
         INSTANT_ACTIONS,
@@ -61,7 +62,6 @@ except ImportError:  # Direct `python ptlc_handshake_agent.py` compatibility.
     )
     from ptlc_runtime import ActionCycle as _Cycle
     from ptlc_runtime import DeployCycle as _DeployCycle
-    from ptlc_runtime import MotionSegment as _MotionSegment
 
 
 __all__ = [
@@ -85,6 +85,7 @@ class PtlcHandshakeSimulator:
         delay_s: float = 0.2,
         stations: tuple[str, ...] = STATIONS,
         contracts: Mapping[str, StationContract] | None = None,
+        plant: PtlcPlant | None = None,
     ) -> None:
         """创建状态机；参数为变量端口、配置、延时、工位和可选契约，无返回值。"""
 
@@ -100,19 +101,14 @@ class PtlcHandshakeSimulator:
         missing_contracts = sorted(set(self.stations) - set(self.contracts))
         if missing_contracts:
             raise ValueError(f"缺少 PTLC 工位行为契约: {', '.join(missing_contracts)}")
+        self.plant = plant or PtlcPlant(adapter, self.contracts, self.config)
         self._previous_start = {station: False for station in self.stations}
         self._cycles: dict[str, _Cycle] = {}
         self._previous_deploy_start = False
         self._deploy_cycle: _DeployCycle | None = None
         self.runtime_faults = RuntimeFaults()
-        process = dict(self.config.get("process", {}))
-        material = dict(process.get("material", {}))
-        self.process_state: dict[str, Any] = {
-            "feed_count": max(0, int(material.get("feed_count", 12))),
-            "waste_count": max(0, int(material.get("waste_count", 0))),
-            "waste_armed": False,
-            "vacuum_on": False,
-        }
+        # 兼容旧快照键名；PLC 过程状态的唯一真源已经收敛到 PtlcPlant。
+        self.process_state = self.plant.world
         self.events: list[dict[str, Any]] = []
 
     @staticmethod
@@ -130,13 +126,21 @@ class PtlcHandshakeSimulator:
             for field in (*INPUT_FIELDS, *OUTPUT_DEFAULTS)
         }
         names.update(str(name) for name in self.config.get("initial_values", {}))
-        names.update((
-            "PLC_Ready", "PLC_Axis_CommOperational",
-            "PLC_Deploy_RequestSeq", "PLC_Deploy_CommitSeq",
-            "PLC_Deploy_Start", "PLC_Deploy_Reset", "PLC_Deploy_State",
-            "PLC_Deploy_AcceptedSeq", "PLC_Deploy_ErrorCode",
-            "Pump_Vacuum_On",
-        ))
+        names.update(
+            (
+                "PLC_Ready",
+                "PLC_Axis_CommOperational",
+                "PLC_Deploy_RequestSeq",
+                "PLC_Deploy_CommitSeq",
+                "PLC_Deploy_Start",
+                "PLC_Deploy_Reset",
+                "PLC_Deploy_State",
+                "PLC_Deploy_AcceptedSeq",
+                "PLC_Deploy_ErrorCode",
+                "Pump_Vacuum_On",
+            )
+        )
+        names.update(self.plant.required_nodes())
         for effect in all_effects(self.config):
             names.update(effect_names(effect))
         for items in dict(self.config.get("motion_effects", {})).values():
@@ -177,6 +181,7 @@ class PtlcHandshakeSimulator:
             self._previous_deploy_start = bool(self.adapter.read("PLC_Deploy_Start"))
         except KeyError:
             self._previous_deploy_start = False
+        self.plant.sync_inputs()
 
     def cleanup(self) -> None:
         """停止代理管理的物理输出，同时保留 L2 终态与序号事实。
@@ -185,6 +190,8 @@ class PtlcHandshakeSimulator:
         下一代理实例恢复边沿基线，避免保持 Start 时重放非幂等动作。
         """
 
+        for cycle in self._cycles.values():
+            self.plant.cancel(cycle.plant_action)
         self._cycles.clear()
         try:
             self.adapter.write("Pump_Vacuum_On", False)
@@ -211,6 +218,7 @@ class PtlcHandshakeSimulator:
             },
             "deploy_active": self._deploy_cycle is not None,
             "process": dict(self.process_state),
+            "plant": self.plant.snapshot(),
             "faults": self.runtime_faults.snapshot(),
             "events": self.events[-200:],
         }
@@ -218,12 +226,14 @@ class PtlcHandshakeSimulator:
     def _record(self, event: HandshakeEvent) -> None:
         """追加握手事件并限制历史长度；参数为事件，返回无。"""
 
-        self.events.append({
-            "station": event.station,
-            "phase": event.phase,
-            "action_code": event.action_code,
-            "request_seq": event.request_seq,
-        })
+        self.events.append(
+            {
+                "station": event.station,
+                "phase": event.phase,
+                "action_code": event.action_code,
+                "request_seq": event.request_seq,
+            }
+        )
         if len(self.events) > 1000:
             del self.events[:-500]
 
@@ -275,95 +285,17 @@ class PtlcHandshakeSimulator:
 
         return (
             station == "StagingA"
-            or station == "FeedLift" and code != 12
-            or station == "Develop" and code in {50, 51}
-            or station == "Sampling" and code == 62
+            or station == "FeedLift"
+            and code != 12
+            or station == "Develop"
+            and code in {50, 51}
+            or station == "Sampling"
+            and code == 62
         )
 
-    def _motion_segment(
-        self,
-        station: str,
-        actual_name: str,
-        target: float,
-        *,
-        starts_after: float = 0.0,
-        start: float | None = None,
-    ) -> _MotionSegment | None:
-        """捕获一段轴运动及其持续时间。
-
-        参数：工位用于读取速度，``actual_name`` 是实际位置节点，``target`` 是目标值；
-        ``starts_after`` 表示前序相位耗时，``start`` 可指定前一段的终点。
-        返回：节点存在且数值有效时返回运动段，否则返回空以兼容缺失的可选轴。
-        """
-
-        try:
-            start_value = float(self.adapter.read(actual_name)) if start is None else float(start)
-            target_value = float(target)
-        except (KeyError, TypeError, ValueError):
-            return None
-        speed = max(
-            float(dict(self.config.get("motion_speed", {})).get(station, 100.0)),
-            0.001,
-        )
-        return _MotionSegment(
-            actual_name=actual_name,
-            start=start_value,
-            target=target_value,
-            starts_after=max(float(starts_after), 0.0),
-            duration=abs(target_value - start_value) / speed,
-        )
-
-    def _motion_for(self, station: str, code: int) -> tuple[_MotionSegment, ...]:
-        """按动作码构造可观察轴序，禁止把工位全部轴同时镜像。
-
-        参数：``station`` 与 ``code`` 标识已受理的原子动作。
-        返回：按真实先后关系排列的可观察运动段；不可见的 HMI 示教轴不编造目标。
-        """
-
-        if station == "Sampling" and code == 10:
-            # 初始化：5Z 先回零；随后 4X/7Y 回零。现役 ST 明确禁止移动 3Y。
-            z = self._motion_segment(station, "Sampling_5Z_ActPos", 0.0)
-            offset = z.duration if z is not None else 0.0
-            segments = [z]
-            segments.append(self._motion_segment(
-                station, "Sampling_4X_ActPos", 0.0, starts_after=offset
-            ))
-            segments.append(self._motion_segment(
-                station, "Spot_7Y_ActPos", 0.0, starts_after=offset
-            ))
-            return tuple(item for item in segments if item is not None)
-        if station == "Rail" and code == 10:
-            try:
-                index = int(self.adapter.read("Rail_Target_Position")) - 1
-                target = float(list(self.adapter.read("Rail_Pos_Target"))[index])
-            except (KeyError, IndexError, TypeError, ValueError):
-                return ()
-            segment = self._motion_segment(station, "Rail_ActPos", target)
-            return (segment,) if segment is not None else ()
-
-        result: list[_MotionSegment] = []
-        for item in dict(self.config.get("action_motion_effects", {})).get(
-            station, {}
-        ).get(str(code), ()) or ():
-            try:
-                target = (
-                    float(item["value"])
-                    if "value" in item
-                    else float(self.adapter.read(str(item["from"])))
-                )
-                segment = self._motion_segment(
-                    station,
-                    str(item["to"]),
-                    target,
-                    starts_after=float(item.get("starts_after", 0.0)),
-                )
-            except (KeyError, TypeError, ValueError):
-                continue
-            if segment is not None:
-                result.append(segment)
-        return tuple(result)
-
-    def _validate_action(self, station: str, code: int) -> tuple[str, int, int, bool] | None:
+    def _validate_action(
+        self, station: str, code: int
+    ) -> tuple[str, int, int, bool] | None:
         """复刻能由 flat OPC UA 参数确定的受理门；返回终态近似或 None。"""
         try:
             if station == "Rail" and code == 10:
@@ -376,9 +308,13 @@ class PtlcHandshakeSimulator:
                     return "rejected", 102, 0, True
             elif station == "Sampling" and code == 55:
                 count = int(self.adapter.read("Sampling_rinse_mix_count"))
-                instructions = list(self.adapter.read("Sampling_rinse_mix_instructions"))
-                if not 1 <= count <= 20 or len(instructions) != 4 or not all(
-                    str(value).strip() for value in instructions
+                instructions = list(
+                    self.adapter.read("Sampling_rinse_mix_instructions")
+                )
+                if (
+                    not 1 <= count <= 20
+                    or len(instructions) != 4
+                    or not all(str(value).strip() for value in instructions)
                 ):
                     return "error", 466, 90, False
             elif station == "Collect" and code == 22:
@@ -402,7 +338,8 @@ class PtlcHandshakeSimulator:
         序号是已发生的握手事实，任何 Reset 都不得清除。
         """
 
-        self._cycles.pop(station, None)
+        old_cycle = self._cycles.pop(station, None)
+        self.plant.cancel(old_cycle.plant_action if old_cycle is not None else None)
         if state == 10 and station == "StagingA":
             self.adapter.write(self.node(station, "State"), 50)
             self.adapter.write(self.node(station, "ErrorCode"), 402)
@@ -459,24 +396,53 @@ class PtlcHandshakeSimulator:
         elif outcome == "interrupt":
             error_code, safe_state = 202, 90
         action = contract.action(code)
-        motion = self._motion_for(station, code) if outcome == "done" else ()
+        plant_action = None
+        if outcome == "done":
+            plant_action = self.plant.begin(
+                station, code, now, self._station_delay(station, code)
+            )
+            outcome = plant_action.outcome
+            error_code = plant_action.error_code
+            safe_state = plant_action.safe_state
+            retryable = plant_action.retryable
+        elif outcome == "collect_check_bottle":
+            # A23 的缩回过程立即开始，瓶传感器只在动作计时结束时判定。
+            plant_action = self.plant.begin(
+                station, code, now, self._station_delay(station, code)
+            )
+        motion = plant_action.motion if plant_action is not None else ()
         motion_duration = max(
             (segment.starts_after + segment.duration for segment in motion), default=0.0
         )
-        delay = max(self._station_delay(station, code), motion_duration)
+        delay = max(
+            plant_action.duration
+            if plant_action is not None
+            else self._station_delay(station, code),
+            motion_duration,
+        )
         if station == "Sampling" and code == 10 and outcome == "done":
             pump_poll = max(
-                float(self.contracts[station].constants.get("pump_poll_interval_s", 0.0)),
+                float(
+                    self.contracts[station].constants.get("pump_poll_interval_s", 0.0)
+                ),
                 0.0,
             )
             delay = motion_duration + pump_poll
-        if outcome == "collect_wait_empty" or outcome == "unmodeled":
+        if outcome in {"collect_wait_empty", "collect_check_bottle"}:
+            gate_due = self.plant.request_gate_resolution(station, code, now)
+            if outcome == "collect_wait_empty":
+                delay = float("inf") if gate_due is None else max(gate_due - now, 0.0)
+            elif gate_due is not None:
+                delay = max(delay, gate_due - now)
+        if outcome == "unmodeled":
             delay = float("inf")
         if outcome in {"global_reject", "rejected", "reject", "unknown"}:
             # 确定性受理门失败在同一 PLC 扫描进入 REJECTED，不能伪造 RUNNING 窗口。
             delay = 0.0
-        elif action is not None and (
-            action.kind == "instant" or (station, code) in INSTANT_ACTIONS
+        elif (
+            outcome == "done"
+            and action is not None
+            and (action.kind == "instant" or (station, code) in INSTANT_ACTIONS)
         ):
             # 真 PLC 的内联写位动作在受理扫描内完成，不受仿真默认延时影响。
             delay = 0.0
@@ -491,9 +457,19 @@ class PtlcHandshakeSimulator:
                 outcome, error_code, safe_state = "error", 500, 90
             else:
                 if code == 50 and tank_state in {10, 90}:
-                    outcome, error_code, safe_state, retryable = "rejected", 501, 0, True
+                    outcome, error_code, safe_state, retryable = (
+                        "rejected",
+                        501,
+                        0,
+                        True,
+                    )
                 elif code == 51 and tank_state not in {0, 98, 99}:
-                    outcome, error_code, safe_state, retryable = "rejected", 511, 0, True
+                    outcome, error_code, safe_state, retryable = (
+                        "rejected",
+                        511,
+                        0,
+                        True,
+                    )
                 else:
                     outcome = "tank_drain" if code == 50 else "tank_release"
                     try:
@@ -501,9 +477,17 @@ class PtlcHandshakeSimulator:
                     except KeyError:
                         outcome = "done"
         cycle = _Cycle(
-            code, seq, now, now + delay, outcome,
-            error_code=error_code, safe_state=safe_state, retryable=retryable,
-            steps=steps, motion=motion,
+            code,
+            seq,
+            now,
+            now + delay,
+            outcome,
+            error_code=error_code,
+            safe_state=safe_state,
+            retryable=retryable,
+            steps=steps,
+            motion=motion,
+            plant_action=plant_action,
         )
         self._cycles[station] = cycle
         self.adapter.write(self.node(station, "AcceptedSeq"), seq)
@@ -557,6 +541,7 @@ class PtlcHandshakeSimulator:
         返回：无；满足动态门禁时会从冻结态进入可计时执行态。
         """
 
+        self.plant.advance(now)
         if cycle.outcome == "collect_wait_empty":
             try:
                 occupied = bool(int(self.adapter.read("IX8")) & (1 << 1))
@@ -566,41 +551,54 @@ class PtlcHandshakeSimulator:
                 return
             cycle.outcome = "done"
             cycle.started_at = now
-            cycle.due_at = now + self._station_delay(station, cycle.action_code)
+            cycle.plant_action = self.plant.begin(
+                station,
+                cycle.action_code,
+                now,
+                self._station_delay(station, cycle.action_code),
+            )
+            cycle.outcome = cycle.plant_action.outcome
+            cycle.error_code = cycle.plant_action.error_code
+            cycle.safe_state = cycle.plant_action.safe_state
+            cycle.retryable = cycle.plant_action.retryable
+            cycle.motion = cycle.plant_action.motion
+            cycle.due_at = now + cycle.plant_action.duration
         elif cycle.outcome == "collect_check_bottle" and now >= cycle.due_at - 1e-9:
             try:
                 bottle_present = bool(int(self.adapter.read("IX8")) & (1 << 1))
             except (KeyError, TypeError, ValueError):
                 bottle_present = False
             if bottle_present:
-                cycle.outcome = "done"
+                if cycle.plant_action is None:
+                    cycle.plant_action = self.plant.begin(
+                        station,
+                        cycle.action_code,
+                        cycle.started_at,
+                        self._station_delay(station, cycle.action_code),
+                    )
+                cycle.outcome = cycle.plant_action.outcome
+                cycle.error_code = cycle.plant_action.error_code
+                cycle.safe_state = cycle.plant_action.safe_state
+                cycle.retryable = cycle.plant_action.retryable
+                cycle.motion = cycle.plant_action.motion
             else:
                 cycle.outcome = "error"
                 cycle.error_code = 201
                 cycle.safe_state = 90
                 cycle.retryable = True
         duration = max(cycle.due_at - cycle.started_at, 0.0)
-        fraction = 1.0 if duration == 0 else min(max(
-            (now - cycle.started_at) / duration, 0.0
-        ), 1.0)
+        fraction = (
+            1.0
+            if duration == 0
+            else min(max((now - cycle.started_at) / duration, 0.0), 1.0)
+        )
         if cycle.steps and self._publishes_public_step(station, cycle.action_code):
             index = min(int(fraction * len(cycle.steps)), len(cycle.steps) - 1)
             if index != cycle.last_step_index:
                 self.adapter.write(self.node(station, "Step"), cycle.steps[index])
                 cycle.last_step_index = index
-        elapsed = max(0.0, now - cycle.started_at)
-        for segment in cycle.motion:
-            if elapsed < segment.starts_after:
-                continue
-            local_fraction = (
-                1.0
-                if segment.duration == 0
-                else min((elapsed - segment.starts_after) / segment.duration, 1.0)
-            )
-            self.adapter.write(
-                segment.actual_name,
-                segment.start + (segment.target - segment.start) * local_fraction,
-            )
+        if cycle.plant_action is not None:
+            self.plant.progress(cycle.plant_action, now)
         if cycle.outcome == "tank_drain":
             self._progress_tank_drain(cycle, now)
 
@@ -643,6 +641,9 @@ class PtlcHandshakeSimulator:
 
         if cycle.outcome in {"done", "tank_drain", "tank_release"}:
             try:
+                if cycle.plant_action is not None:
+                    cycle.plant_action.outcome = cycle.outcome
+                    self.plant.finish(cycle.plant_action)
                 for effect in effects_for(self.config, station, cycle.action_code):
                     apply_effect(self.adapter, effect)
                 apply_process_effects(
@@ -654,16 +655,27 @@ class PtlcHandshakeSimulator:
                 state, error, safe, retryable, phase = 20, 0, 10, False, "completed"
         elif cycle.outcome in {"global_reject", "rejected", "reject", "unknown"}:
             state, error, safe, retryable, phase = (
-                30, cycle.error_code, cycle.safe_state, cycle.retryable, "rejected"
+                30,
+                cycle.error_code,
+                cycle.safe_state,
+                cycle.retryable,
+                "rejected",
             )
         elif cycle.outcome == "interrupt":
             state, error, safe, retryable, phase = (
-                50, cycle.error_code, cycle.safe_state, cycle.retryable, "interrupted"
+                50,
+                cycle.error_code,
+                cycle.safe_state,
+                cycle.retryable,
+                "interrupted",
             )
         else:
             state, error, safe, retryable, phase = (
-                40, cycle.error_code or 201, cycle.safe_state or 90,
-                cycle.retryable, "error",
+                40,
+                cycle.error_code or 201,
+                cycle.safe_state or 90,
+                cycle.retryable,
+                "error",
             )
         terminal_step = 0
         if self._publishes_public_step(station, cycle.action_code) and cycle.steps:
@@ -681,6 +693,7 @@ class PtlcHandshakeSimulator:
         """执行一次全工位扫描；参数为可选时钟，返回本扫描产生的事件。"""
 
         current = time.monotonic() if now is None else float(now)
+        self.plant.advance(current)
         events: list[HandshakeEvent] = []
         try:
             self._previous_deploy_start, self._deploy_cycle = step_deploy(
@@ -712,7 +725,9 @@ class PtlcHandshakeSimulator:
                         else int(self.adapter.read(self.node(station, "AcceptedSeq")))
                     )
                     phase = self._reset_station(station, state, action_code)
-                    events.append(HandshakeEvent(station, phase, action_code, request_seq))
+                    events.append(
+                        HandshakeEvent(station, phase, action_code, request_seq)
+                    )
             elif (
                 station == "StagingA"
                 and start
@@ -728,26 +743,34 @@ class PtlcHandshakeSimulator:
                 self.adapter.write(self.node(station, "Retryable"), True)
                 self.adapter.write(self.node(station, "CompletedSeq"), request_seq)
                 self.adapter.write(self.node(station, "State"), 30)
-                events.append(HandshakeEvent(
-                    station, "rejected", code, request_seq
-                ))
+                events.append(HandshakeEvent(station, "rejected", code, request_seq))
             elif start and not self._previous_start[station] and state == 0:
                 if station == "StagingA":
-                    request_seq = int(self.adapter.read(self.node(station, "RequestSeq")))
-                    accepted_seq = int(self.adapter.read(self.node(station, "AcceptedSeq")))
-                    completed_seq = int(self.adapter.read(self.node(station, "CompletedSeq")))
+                    request_seq = int(
+                        self.adapter.read(self.node(station, "RequestSeq"))
+                    )
+                    accepted_seq = int(
+                        self.adapter.read(self.node(station, "AcceptedSeq"))
+                    )
+                    completed_seq = int(
+                        self.adapter.read(self.node(station, "CompletedSeq"))
+                    )
                     if request_seq <= accepted_seq or request_seq <= completed_seq:
                         self.adapter.write(self.node(station, "Step"), 0)
                         self.adapter.write(self.node(station, "ErrorCode"), 102)
                         self.adapter.write(self.node(station, "SafeState"), 0)
                         self.adapter.write(self.node(station, "Retryable"), True)
                         self.adapter.write(self.node(station, "State"), 30)
-                        events.append(HandshakeEvent(
-                            station,
-                            "rejected",
-                            int(self.adapter.read(self.node(station, "ActionCode"))),
-                            request_seq,
-                        ))
+                        events.append(
+                            HandshakeEvent(
+                                station,
+                                "rejected",
+                                int(
+                                    self.adapter.read(self.node(station, "ActionCode"))
+                                ),
+                                request_seq,
+                            )
+                        )
                         self._previous_start[station] = start
                         continue
                 cycle, accepted = self._start_cycle(station, current)
@@ -772,11 +795,14 @@ class PtlcHandshakeSimulator:
                     self.adapter.write(self.node(station, "ErrorCode"), 0)
                     self.adapter.write(self.node(station, "SafeState"), 0)
                     self.adapter.write(self.node(station, "Retryable"), False)
-                events.append(HandshakeEvent(
-                    station, "rearmed",
-                    int(self.adapter.read(self.node(station, "ActiveCode"))),
-                    int(self.adapter.read(self.node(station, "CompletedSeq"))),
-                ))
+                events.append(
+                    HandshakeEvent(
+                        station,
+                        "rearmed",
+                        int(self.adapter.read(self.node(station, "ActiveCode"))),
+                        int(self.adapter.read(self.node(station, "CompletedSeq"))),
+                    )
+                )
             self._previous_start[station] = start
         for event in events:
             self._record(event)

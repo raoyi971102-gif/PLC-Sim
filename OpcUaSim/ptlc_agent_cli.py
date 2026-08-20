@@ -41,11 +41,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--poll-ms", type=int, default=None)
     parser.add_argument("--time-scale", type=float, default=None)
     parser.add_argument(
+        "--sensor-mode",
+        choices=("standalone", "federated"),
+        default=None,
+        help="覆盖配置中的 PTLC 传感器模式",
+    )
+    parser.add_argument(
         "--fault-file",
         default=None,
         help="运行期故障 JSON；格式 {Station:{ActionCode: outcome}}",
     )
-    parser.add_argument("--state-file", default=None, help="周期写出确定性进程/动作状态 JSON")
+    parser.add_argument(
+        "--world-file",
+        default=None,
+        help="外部设备模拟器写入的 PLC 输入世界 JSON；接受物料计数、传感器和幂等 events",
+    )
+    parser.add_argument(
+        "--state-file", default=None, help="周期写出确定性进程/动作状态 JSON"
+    )
     parser.add_argument("--max-actions", type=int, default=0)
     parser.add_argument("--no-initialize", action="store_true")
     parser.add_argument("--keep-state-on-exit", action="store_true")
@@ -76,7 +89,9 @@ def _load_fault_file(
         return fault_stamp
 
 
-def _write_state_file(simulator: PtlcHandshakeSimulator, state_path: Path | None) -> None:
+def _write_state_file(
+    simulator: PtlcHandshakeSimulator, state_path: Path | None
+) -> None:
     """把状态机快照写到可选 JSON 路径；路径为空时不执行。"""
 
     if state_path is None:
@@ -88,49 +103,102 @@ def _write_state_file(simulator: PtlcHandshakeSimulator, state_path: Path | None
     )
 
 
+def _load_world_file(
+    simulator: PtlcHandshakeSimulator,
+    world_path: Path | None,
+    world_stamp: int | None,
+) -> int | None:
+    """按修改时间加载外部设备提供的 PLC 输入事实，返回新的时间戳。"""
+
+    if world_path is None:
+        return world_stamp
+    try:
+        stamp = world_path.stat().st_mtime_ns
+        if stamp != world_stamp:
+            payload = json.loads(world_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise TypeError("world JSON 顶层必须是对象")
+            simulator.plant.apply_world_patch(payload)
+        return stamp
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"PLC 输入世界文件无效: {exc}", file=sys.stderr, flush=True)
+        return world_stamp
+
+
 def main(argv: list[str] | None = None) -> int:
     """运行 PTLC 代理命令；参数为可选 argv，返回进程退出码。"""
 
     args = build_parser().parse_args(argv)
     config = load_yaml(args.config)
+    if args.sensor_mode is not None:
+        plant = dict(config.get("plant", {}))
+        plant["sensor_mode"] = args.sensor_mode
+        config["plant"] = plant
     browse_path = tuple(str(part) for part in config.get("gvl_path", ()))
     if not browse_path:
         print("PTLC 配置缺少 gvl_path", file=sys.stderr)
         return 2
-    delay_s = max(float(
-        args.delay_ms if args.delay_ms is not None else config.get("delay_ms", 200)
-    ), 0.0) / 1000.0
-    poll_s = max(float(
-        args.poll_ms if args.poll_ms is not None else config.get("poll_ms", 20)
-    ), 5.0) / 1000.0
+    delay_s = (
+        max(
+            float(
+                args.delay_ms
+                if args.delay_ms is not None
+                else config.get("delay_ms", 200)
+            ),
+            0.0,
+        )
+        / 1000.0
+    )
+    poll_s = (
+        max(
+            float(
+                args.poll_ms if args.poll_ms is not None else config.get("poll_ms", 20)
+            ),
+            5.0,
+        )
+        / 1000.0
+    )
     adapter = OpcUaVariableAdapter(
         args.url, browse_path, username=args.username, password=args.password
     )
     simulator = PtlcHandshakeSimulator(adapter, config=config, delay_s=delay_s)
 
     if args.command == "list":
-        print(json.dumps({
-            "stations": simulator.stations,
-            "nodes": simulator.contract_names(),
-            "actions": {
-                station: list(simulator.contracts[station].accepts)
-                for station in simulator.stations
-            },
-            "modeled_actions": {
-                station: sorted(MODELED_ACTIONS[station])
-                for station in simulator.stations
-            },
-            "unmodeled_actions": {
-                station: sorted(
-                    set(simulator.contracts[station].accepts) - MODELED_ACTIONS[station]
-                )
-                for station in simulator.stations
-            },
-            "behavior_sha256": {
-                station: simulator.contracts[station].source_sha256
-                for station in simulator.stations
-            },
-        }, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {
+                    "scope": "plc-only",
+                    "orchestrator": "Uni-Lab OS Backend",
+                    "sensor_mode": simulator.plant.sensors.mode,
+                    "stations": simulator.stations,
+                    "nodes": simulator.contract_names(),
+                    "actions": {
+                        station: list(simulator.contracts[station].accepts)
+                        for station in simulator.stations
+                    },
+                    "modeled_actions": {
+                        station: sorted(MODELED_ACTIONS[station])
+                        for station in simulator.stations
+                    },
+                    "unmodeled_actions": {
+                        station: sorted(
+                            set(simulator.contracts[station].accepts)
+                            - MODELED_ACTIONS[station]
+                        )
+                        for station in simulator.stations
+                    },
+                    "coverage": simulator.plant.snapshot()["coverage"],
+                    "behavior_sha256": {
+                        station: simulator.contracts[station].source_sha256
+                        for station in simulator.stations
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 0
 
     adapter.connect()
@@ -171,7 +239,9 @@ def main(argv: list[str] | None = None) -> int:
 
         completed = 0
         time_scale = float(
-            args.time_scale if args.time_scale is not None else config.get("time_scale", 1.0)
+            args.time_scale
+            if args.time_scale is not None
+            else config.get("time_scale", 1.0)
         )
         if not 0 < time_scale <= 1000:
             print("time-scale 必须在 0..1000 之间", file=sys.stderr)
@@ -179,14 +249,21 @@ def main(argv: list[str] | None = None) -> int:
         real_epoch = time.monotonic()
         sim_epoch = real_epoch
         fault_path = Path(args.fault_file).resolve() if args.fault_file else None
+        world_path = Path(args.world_file).resolve() if args.world_file else None
         state_path = Path(args.state_file).resolve() if args.state_file else None
         fault_stamp: int | None = None
+        world_stamp: int | None = None
         next_state_write = 0.0
-        print(f"PTLC L2 代理已连接 {args.url}，工位={','.join(simulator.stations)}", flush=True)
+        print(
+            f"PTLC L2 代理已连接 {args.url}，工位={','.join(simulator.stations)}，"
+            f"传感器模式={simulator.plant.sensors.mode}",
+            flush=True,
+        )
         while not stopping:
             real_now = time.monotonic()
             sim_now = sim_epoch + (real_now - real_epoch) * time_scale
             fault_stamp = _load_fault_file(simulator, fault_path, fault_stamp)
+            world_stamp = _load_world_file(simulator, world_path, world_stamp)
             for event in simulator.step(now=sim_now):
                 print(json.dumps(event.__dict__, ensure_ascii=False), flush=True)
                 if event.phase in {"completed", "rejected", "error", "interrupted"}:

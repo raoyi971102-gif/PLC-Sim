@@ -113,6 +113,7 @@ class AppState:
     agent_state_file: str | None = None
     ptlc_fault_file: str | None = None
     ptlc_state_file: str | None = None
+    ptlc_world_file: str | None = None
     attached: bool = False
     server_client_url: str | None = None
     server_csv_paths: list[str] = field(default_factory=list)
